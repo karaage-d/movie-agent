@@ -1,0 +1,76 @@
+# =====================================================
+# 电影查询智能体 - 配置模板
+# 用法：复制本文件为 config.yaml，再填入自己的 Key
+#   Windows:  copy config\config.example.yaml config\config.yaml
+#   或直接设置环境变量 DASHSCOPE_API_KEY / AMAP_API_KEY（优先级低于本文件）
+# ⚠️ config.yaml 已被 .gitignore 忽略，请勿把真实 Key 提交到仓库
+# =====================================================
+
+# ---- 模型配置 ----
+model:
+  provider: "qwen"              # qwen(主用) / ollama / openai
+  # 通义千问（申请：https://dashscope.console.aliyun.com/）
+  qwen_model: "qwen-plus"       # 可选: qwen-turbo / qwen-plus / qwen-max
+  qwen_api_key: ""              # ⚠️ 在这里填入你的 DashScope API Key，或设置环境变量 DASHSCOPE_API_KEY
+  # --- DeepSeek（申请：https://platform.deepseek.com/api_keys）---
+  # 模型名可选 deepseek-flash / deepseek-v4-pro（两者都支持 Function Calling）
+  deepseek_model: "deepseek-flash"
+  deepseek_api_key: ""                      # 或设置环境变量 DEEPSEEK_API_KEY
+  deepseek_base_url: "https://api.deepseek.com"
+  deepseek_thinking: false                  # 思考模式；工具调用场景建议关闭，响应更快更省
+
+  # --- Ollama（备选，本地模型）---
+  ollama_model: "qwen-plus"
+  ollama_base_url: "http://localhost:11434"
+  # OpenAI（备选）
+  openai_model: "gpt-3.5-turbo"
+  openai_api_key: ""
+  openai_base_url: ""
+  temperature: 0.3
+  max_tokens: 2048
+
+# ---- Embedding ----
+embedding:
+  provider: "qwen"              # qwen(在线,零本地依赖) / bge / m3e
+  model_name: "text-embedding-v3"
+  cache_dir: "./models_cache"
+
+# ---- 向量库 ----
+vectorstore:
+  provider: "faiss"
+  persist_dir: "./data/vector_db"
+
+# ---- 数据路径 ----
+data:
+  raw_dir: "./data/raw"
+  cleaned_dir: "./data/cleaned"
+  posters_dir: "./data/posters"
+  movies_csv: "./data/cleaned/movies.csv"
+  reviews_csv: "./data/cleaned/reviews.csv"
+
+# ---- 爬虫配置 ----
+crawler:
+  douban_api: ""
+  tmdb_api_key: ""              # 可选，申请：https://www.themoviedb.org/settings/api
+  request_delay: 2
+  max_reviews_per_movie: 20
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# ---- 智能体配置 ----
+agent:
+  verbose: true
+  max_iterations: 5
+  top_k_reviews: 5
+  good_rating_threshold: 7.0
+  show_poster: true
+  show_trailer: true
+
+# ---- 数据分析 ----
+analysis:
+  method: "spearman"
+  output_dir: "./output/analysis"
+  plot: true
+
+# ---- 高德地图（附近影院功能）----
+amap:
+  api_key: "YOUR_AMAP_KEY_HERE"  # 高德开放平台 Web API Key，或设置环境变量 AMAP_API_KEY

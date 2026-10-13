@@ -1,0 +1,50 @@
+# =====================================================
+# 电影查询智能体 - 依赖清单
+# Python 版本要求：3.12（见 .python-version）
+#   ⚠️ 不要用 3.15：faiss-cpu 最高支持到 3.14，zstandard（langchain 传递依赖）
+#      在 3.15 没有预编译包，pip 会转去源码编译并因缺少 MSVC 而失败。
+# 安装: pip install -r requirements.txt
+# =====================================================
+
+# ---- LangChain 核心（Agent / RAG 链路）----
+# 说明：不需要 langchain 元包（会连带 langgraph），代码只用到 core/community/text-splitters
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# ---- LLM 供应商（OpenAI 兼容接口）----
+# 对话模型：DeepSeek / 通义千问 / OpenAI 三家共用 openai SDK
+openai>=1.40.0
+# 通义千问原生 SDK（Embedding 走它；切到本地 bge 后仅备用）
+dashscope>=1.20.0
+
+# ---- 向量检索 ----
+faiss-cpu>=1.8.0
+
+# ---- 本地 Embedding（当前默认：bge-small-zh-v1.5）----
+# 会连带安装 CPU 版 PyTorch（约 120MB 轮子）。若改用 embedding.provider=qwen
+# 走在线向量化，这两项可以省略，但首次用 bge 必须先装。
+sentence-transformers>=3.0.0
+huggingface-hub>=0.24.0
+
+# ---- 数据处理 ----
+pandas>=2.2.0
+numpy>=1.26.0
+openpyxl>=3.1.0          # 读取 .xlsx 原始数据（pandas.read_excel 依赖）
+
+# ---- 数据分析与可视化 ----
+matplotlib>=3.9.0
+seaborn>=0.13.2
+
+# ---- 网络请求（豆瓣公开接口 / 高德地图 Web API）----
+requests>=2.32.0
+
+# ---- 工具 ----
+pyyaml>=6.0.0
+Pillow>=10.4.0           # 海报下载后的图片完整性校验
+
+# =====================================================
+# 可选依赖（按需手动安装）
+# =====================================================
+# 本地大模型：把 config 里 model.provider 改为 ollama 时需要
+# langchain-ollama>=0.1.8

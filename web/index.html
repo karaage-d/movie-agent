@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>影探 · 电影智能体</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='78' font-size='80'%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- 环境氛围：极光 + 颗粒 -->
+<div class="ambience"></div>
+<div class="grain"></div>
+
+<div class="app" id="app" v-cloak>
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">🎬</div>
+      <div>
+        <div class="brand-name">影探</div>
+        <div class="brand-sub">Movie Agent</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button v-for="item in navItems" :key="item.key"
+              class="nav-item" :class="{ active: view === item.key }"
+              @click="go(item.key)">
+        <span class="nav-icon">{{ item.icon }}</span><span>{{ item.label }}</span>
+      </button>
+    </nav>
+
+    <div class="topbar-right">
+      <div class="status-chip" :title="status.error || '模型与知识库状态'">
+        <span class="dot" :class="statusClass"></span>
+        <span class="status-text">{{ statusText }}</span>
+      </div>
+      <button class="btn btn-sm btn-ghost" @click="resetChat" title="清空对话历史">🧹 清空</button>
+    </div>
+  </header>
+
+  <!-- ================= 视图区 ================= -->
+  <main class="viewport">
+    <transition name="view-fade" mode="out-in">
+
+      <!-- ---------------- 首页 ---------------- -->
+      <section class="view" v-if="view === 'home'" key="home">
+        <div class="view-inner">
+
+          <div class="hero rise">
+            <div class="eyebrow">RAG · TOOL CALLING · 本地知识库</div>
+            <h1 class="hero-title">找到下一部<em>值得看</em>的电影</h1>
+            <p class="hero-sub">
+              对话式查询 {{ stats.movies }} 部影片的评分、好评率与真实评论，附带海报、预告片、
+              相似推荐与附近影院 —— 数据来自本地向量知识库，查不到就联网补，绝不编造。
+            </p>
+
+            <div class="hero-search">
+              <input class="input" v-model="heroQuery" @keyup.enter="askFromHero"
+                     placeholder="试试输入：我要看流浪地球2">
+              <button class="btn btn-primary" @click="askFromHero" :disabled="!heroQuery.trim()">开始对话</button>
+            </div>
+
+            <div class="hero-hints">
+              <button v-for="h in hints" :key="h" class="hint" @click="quickAsk(h)">{{ h }}</button>
+            </div>
+          </div>
+
+          <div class="section-head rise rise-1">
+            <h2 class="section-title">数据概览</h2>
+            <span class="section-desc">实时读取本地知识库</span>
+          </div>
+
+          <div class="stat-grid rise rise-2">
+            <div class="stat">
+              <div class="stat-label">收录影片</div>
+              <div class="stat-value">{{ stats.movies }}<span class="stat-unit">部</span></div>
+              <div class="stat-hint">{{ stats.yearRange }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">评论样本</div>
+              <div class="stat-value">{{ stats.reviews }}<span class="stat-unit">条</span></div>
+              <div class="stat-hint">用于计算好评率</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">类型标签</div>
+              <div class="stat-value">{{ stats.genres }}<span class="stat-unit">个</span></div>
+              <div class="stat-hint">支持类型筛选</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">平均豆瓣分</div>
+              <div class="stat-value">{{ stats.avgRating }}</div>
+              <div class="stat-hint">满分 10.0</div>
+            </div>
+          </div>
+
+          <div class="section-head rise rise-3">
+            <h2 class="section-title">高分片单</h2>
+            <span class="section-desc">点击海报查看详情</span>
+          </div>
+
+          <div v-if="loadingMovies" class="poster-rail">
+            <div v-for="n in 8" :key="n" class="skeleton" style="width:138px;height:250px;flex:none;border-radius:14px"></div>
+          </div>
+
+          <div v-else class="poster-rail rise rise-4">
+            <div v-for="m in railMovies" :key="m.movie_id" class="poster-tile" @click="openMovie(m.title)">
+              <img v-if="m.poster" :src="m.poster" :alt="m.title" loading="lazy">
+              <div v-else class="poster-empty">
+                <div class="poster-empty-icon">🎞️</div>
+                <div class="poster-empty-text">暂无海报</div>
+              </div>
+              <div class="poster-tile-meta">
+                <div class="poster-tile-title">{{ m.title }}</div>
+                <div class="poster-tile-sub">
+                  <span>{{ m.year || '—' }}</span>
+                  <span class="r">{{ m.douban_rating != null ? m.douban_rating.toFixed(1) : '—' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ---------------- 对话 ---------------- -->
+      <section class="view" v-else-if="view === 'chat'" key="chat" style="padding:22px 26px 26px">
+        <div class="view-inner chat-layout">
+
+          <!-- 对话主体 -->
+          <div class="card chat-panel">
+            <div class="chat-head">
+              <div class="brand-mark" style="width:30px;height:30px;font-size:15px;border-radius:9px">🎬</div>
+              <div style="flex:1">
+                <div class="chat-head-title">影探</div>
+                <div class="chat-head-sub">{{ chatSubtitle }}</div>
+              </div>
+              <span class="tag" v-if="currentMovie">🎯 {{ currentMovie.title }}</span>
+            </div>
+
+            <div class="chat-scroll" ref="chatScroll">
+              <!-- 空态 -->
+              <div v-if="messages.length === 0" class="empty" style="margin:auto">
+                <div class="empty-icon">🍿</div>
+                <div class="empty-title">开始聊聊你想看的电影</div>
+                <div class="empty-desc">说明片名即可，我会把评分、好评率和精选评论一并给你</div>
+                <div class="hero-hints" style="justify-content:center;margin-top:14px">
+                  <button v-for="h in hints" :key="h" class="hint" @click="quickAsk(h)">{{ h }}</button>
+                </div>
+              </div>
+
+              <!-- 消息流 -->
+              <div v-for="(msg, i) in messages" :key="i" class="msg" :class="msg.role">
+                <div class="avatar">{{ msg.role === 'user' ? '🙋' : '🎬' }}</div>
+                <div class="bubble">
+                  <div v-if="msg.role === 'ai'" v-html="renderMd(msg.text)"></div>
+                  <div v-else>{{ msg.text }}</div>
+                  <div v-if="msg.role === 'ai' && msg.poster" class="chat-poster">
+                    <img :src="msg.poster" :alt="msg.movie || '电影海报'" loading="lazy">
+                    <div class="chat-poster-meta">
+                      <div class="chat-poster-title">{{ msg.movie || '海报' }}</div>
+                      <button class="chat-poster-btn" @click="showPoster(msg.movie)">在右侧查看详情 →</button>
+                    </div>
+                  </div>
+                  <div v-else-if="msg.role === 'ai' && msg.posterMissing" class="chat-poster-missing">
+                    🎞️ 本地还没有《{{ msg.movie }}》的海报缓存
+                  </div>
+                  <a v-if="msg.role === 'ai' && msg.trailer" :href="msg.trailer" target="_blank" rel="noopener"
+                     class="tag tag-gold" style="margin-top:11px;text-decoration:none">🎬 查看预告片</a>
+                </div>
+              </div>
+
+              <!-- 思考中 -->
+              <div v-if="thinking" class="msg ai">
+                <div class="avatar">🎬</div>
+                <div class="bubble">
+                  <div class="typing"><i></i><i></i><i></i></div>
+                  <div style="font-size:11.5px;color:var(--text-3);margin-top:7px">影探正在查阅知识库…</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-input-wrap">
+              <div class="chat-input-row">
+                <textarea class="chat-input" v-model="draft" rows="1" ref="chatInput"
+                          placeholder="输入电影名或问题，Enter 发送 / Shift+Enter 换行"
+                          @keydown.enter.exact.prevent="send"
+                          @input="autoGrow"></textarea>
+                <button class="send-btn" @click="send" :disabled="thinking || !draft.trim()">➤</button>
+              </div>
+              <div class="chat-tips">
+                <span>知识库优先</span><span>·</span><span>联网兜底</span><span>·</span>
+                <span>不编造评分</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右侧上下文 -->
+          <aside class="card context-panel">
+            <div class="chat-head" style="padding:14px 18px">
+              <div style="flex:1">
+                <div class="chat-head-title" style="font-size:13.5px">影片详情</div>
+                <div class="chat-head-sub">随对话自动联动</div>
+              </div>
+            </div>
+
+            <div class="context-scroll" v-if="currentMovie">
+              <div class="poster-frame">
+                <img v-if="currentMovie.poster" :src="currentMovie.poster" :alt="currentMovie.title" @error="onPosterError">
+                <div v-else-if="posterLoading" class="poster-empty">
+                  <div class="poster-empty-icon">🎞️</div>
+                  <div class="poster-empty-text">海报加载中…</div>
+                </div>
+                <div v-else class="poster-empty">
+                  <div class="poster-empty-icon">🎞️</div>
+                  <div class="poster-empty-text">本地暂无海报</div>
+                  <div class="poster-empty-hint">运行 scripts\fetch_posters.py 可自动补图</div>
+                </div>
+                <div class="poster-caption">
+                  <div class="poster-caption-title">{{ currentMovie.title }}</div>
+                  <div class="poster-caption-sub">
+                    {{ currentMovie.year || '—' }} · {{ currentMovie.region || '未知地区' }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="rating-block" style="margin:0">
+                <div class="rating-cell">
+                  <div class="v" style="color:var(--gold)">{{ fmt(currentMovie.douban_rating) }}</div>
+                  <div class="l">豆瓣</div>
+                </div>
+                <div class="rating-cell">
+                  <div class="v">{{ fmt(currentMovie.maoyan_rating) }}</div>
+                  <div class="l">猫眼</div>
+                </div>
+                <div class="rating-cell">
+                  <div class="v">{{ fmt(currentMovie.imdb_rating) }}</div>
+                  <div class="l">IMDb</div>
+                </div>
+              </div>
+
+              <div v-if="currentMovie.good_rate != null">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:7px">
+                  <span style="color:var(--text-2)">好评率</span>
+                  <span style="color:var(--green);font-weight:640">{{ currentMovie.good_rate }}%</span>
+                </div>
+                <div class="bar"><div class="bar-fill green" :style="{ width: currentMovie.good_rate + '%' }"></div></div>
+                <div style="font-size:11px;color:var(--text-3);margin-top:6px">
+                  基于 {{ currentMovie.review_count }} 条评论 · 阈值 7.0 分
+                </div>
+              </div>
+
+              <div class="kv">
+                <div class="kv-row"><span class="kv-key">导演</span><span class="kv-val">{{ currentMovie.director || '未知' }}</span></div>
+                <div class="kv-row"><span class="kv-key">主演</span><span class="kv-val">{{ currentMovie.actors || '未知' }}</span></div>
+                <div class="kv-row"><span class="kv-key">类型</span><span class="kv-val">{{ currentMovie.genre }}</span></div>
+                <div class="kv-row" v-if="currentMovie.duration"><span class="kv-key">片长</span><span class="kv-val">{{ currentMovie.duration }} 分钟</span></div>
+                <div class="kv-row" v-if="currentMovie.box_office && currentMovie.box_office !== 'nan'"><span class="kv-key">票房</span><span class="kv-val">{{ currentMovie.box_office }}</span></div>
+              </div>
+
+              <div v-if="currentMovie.summary && currentMovie.summary !== 'nan'">
+                <div class="eyebrow" style="margin-bottom:8px">剧情简介</div>
+                <p style="font-size:12.5px;color:var(--text-2);line-height:1.8">{{ currentMovie.summary }}</p>
+              </div>
+
+              <div v-if="movieDetail">
+                <div class="eyebrow" style="margin:0 0 9px">精选评论</div>
+                <div style="display:flex;flex-direction:column;gap:9px">
+                  <div v-for="(r, i) in detailReviews" :key="i" class="review-item">
+                    <div class="review-meta">
+                      <span class="review-user">{{ r.username || '用户' }}</span>
+                      <span class="tag" :class="r.rating >= 7 ? 'tag-green' : 'tag-red'">{{ r.rating }} 分</span>
+                    </div>
+                    <div class="review-body">{{ r.content }}</div>
+                  </div>
+                  <div v-if="detailReviews.length === 0" class="empty-desc">暂无评论样本</div>
+                </div>
+              </div>
+
+              <div v-if="movieDetail && movieDetail.similar && movieDetail.similar.length">
+                <div class="eyebrow" style="margin:0 0 9px">相似推荐</div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div v-for="s in movieDetail.similar" :key="s.title"
+                       style="display:flex;gap:10px;align-items:center;cursor:pointer"
+                       @click="openMovie(s.title)">
+                    <div style="width:38px;height:54px;border-radius:7px;overflow:hidden;flex:none;border:1px solid var(--line);background:var(--bg-3)">
+                      <img v-if="s.poster" :src="s.poster" style="width:100%;height:100%;object-fit:cover" :alt="s.title">
+                    </div>
+                    <div style="min-width:0">
+                      <div style="font-size:12.5px;font-weight:560;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.title }}</div>
+                      <div style="font-size:11px;color:var(--text-3)">{{ s.year || '—' }} · 豆瓣 {{ fmt(s.douban_rating) }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="empty" style="margin:auto">
+              <div class="empty-icon">🎞️</div>
+              <div class="empty-title">还没有选中的影片</div>
+              <div class="empty-desc">问一部电影，这里会显示海报与详细数据</div>
+            </div>
+          </aside>
+
+        </div>
+      </section>
+
+      <!-- ---------------- 电影库 ---------------- -->
+      <section class="view" v-else-if="view === 'library'" key="library">
+        <div class="view-inner">
+
+          <div class="section-head">
+            <h2 class="section-title">电影库</h2>
+            <span class="section-desc">共 {{ filteredMovies.length }} 部符合条件</span>
+          </div>
+
+          <div class="card filter-bar">
+            <input class="input" v-model="libQuery" placeholder="🔍 搜索片名 / 导演 / 主演">
+            <select class="select" v-model="libSort">
+              <option value="rating">按豆瓣评分</option>
+              <option value="year">按上映年份</option>
+              <option value="title">按片名</option>
+            </select>
+            <div class="chips" style="flex:1;justify-content:flex-end">
+              <button class="chip" :class="{ active: libGenre === '' }" @click="libGenre = ''">全部</button>
+              <button v-for="g in topGenres" :key="g"
+                      class="chip" :class="{ active: libGenre === g }" @click="libGenre = g">{{ g }}</button>
+            </div>
+          </div>
+
+          <div v-if="loadingMovies" class="movie-grid">
+            <div v-for="n in 12" :key="n" class="skeleton" style="height:300px;border-radius:14px"></div>
+          </div>
+
+          <div v-else-if="filteredMovies.length === 0" class="empty">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">没有匹配的影片</div>
+            <div class="empty-desc">换个关键词或清空筛选条件试试</div>
+          </div>
+
+          <div v-else class="movie-grid">
+            <div v-for="m in filteredMovies" :key="m.movie_id" class="movie-card" @click="openMovie(m.title)">
+              <div class="movie-poster">
+                <img v-if="m.poster" :src="m.poster" :alt="m.title" loading="lazy">
+                <div v-else class="poster-empty">
+                  <div class="poster-empty-icon">🎞️</div>
+                  <div class="poster-empty-text">暂无海报</div>
+                </div>
+                <div class="movie-badge">{{ fmt(m.douban_rating) }}</div>
+                <div class="movie-overlay">
+                  <div class="movie-overlay-text">{{ m.summary }}</div>
+                </div>
+              </div>
+              <div class="movie-info">
+                <div class="movie-title">{{ m.title }}</div>
+                <div class="movie-sub">{{ m.year || '—' }} · {{ m.genre }}</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ---------------- 数据分析 ---------------- -->
+      <section class="view" v-else-if="view === 'analysis'" key="analysis">
+        <div class="view-inner">
+
+          <div class="section-head">
+            <h2 class="section-title">数据分析</h2>
+            <span class="section-desc">Spearman 秩相关系数 · 阈值 |r| ≥ 0.7</span>
+          </div>
+
+          <div v-if="loadingAnalysis" class="stat-grid">
+            <div v-for="n in 4" :key="n" class="skeleton" style="height:92px;border-radius:14px"></div>
+          </div>
+
+          <div v-else-if="!analysis">
+            <div class="empty">
+              <div class="empty-icon">📊</div>
+              <div class="empty-title">暂无分析结果</div>
+              <div class="empty-desc">{{ analysisError || '点击下方按钮开始计算' }}</div>
+              <button class="btn btn-primary" style="margin-top:10px" @click="loadAnalysis">开始分析</button>
+            </div>
+          </div>
+
+          <template v-else>
+            <div class="stat-grid">
+              <div class="stat">
+                <div class="stat-label">显著性关联</div>
+                <div class="stat-value">{{ analysis.correlations.length }}<span class="stat-unit">组</span></div>
+                <div class="stat-hint">|r| ≥ 0.7</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">类型维度</div>
+                <div class="stat-value">{{ analysis.genres.length }}<span class="stat-unit">类</span></div>
+                <div class="stat-hint">参与评分分析</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">平均分最高类型</div>
+                <div class="stat-value" style="font-size:19px">{{ analysis.genres[0] ? analysis.genres[0].genre : '—' }}</div>
+                <div class="stat-hint">{{ analysis.genres[0] ? analysis.genres[0].avg_rating + ' 分' : '' }}</div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">样本导演数</div>
+                <div class="stat-value">{{ analysis.directors.length }}<span class="stat-unit">位</span></div>
+                <div class="stat-hint">按平均分排序</div>
+              </div>
+            </div>
+
+            <div class="section-head"><h2 class="section-title">自动洞察</h2></div>
+            <div class="insight-list">
+              <div v-for="(ins, i) in analysis.insights" :key="i" class="insight">
+                <span class="insight-index">{{ i + 1 }}</span><span>{{ ins }}</span>
+              </div>
+            </div>
+
+            <div class="split-2" style="margin-top:34px">
+              <div>
+                <div class="section-head" style="margin-top:0"><h2 class="section-title">变量相关性</h2></div>
+                <div class="card card-pad" style="padding:8px 10px">
+                  <table class="corr-table">
+                    <thead><tr><th>变量 A</th><th>变量 B</th><th>相关系数</th><th>方向</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(c, i) in analysis.correlations" :key="i">
+                        <td>{{ c.var1 }}</td>
+                        <td>{{ c.var2 }}</td>
+                        <td><span class="corr-value" :class="c.correlation > 0 ? 'pos' : 'neg'">{{ c.correlation }}</span></td>
+                        <td>{{ c.direction }}</td>
+                      </tr>
+                      <tr v-if="analysis.correlations.length === 0">
+                        <td colspan="4" style="text-align:center;color:var(--text-3);padding:22px">
+                          当前样本量下没有 |r| ≥ 0.7 的强相关组合
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <div class="section-head" style="margin-top:0"><h2 class="section-title">各类型评分</h2></div>
+                <div class="card card-pad" style="padding:8px 10px">
+                  <table class="corr-table">
+                    <thead><tr><th>类型</th><th>样本</th><th>平均分</th></tr></thead>
+                    <tbody>
+                      <tr v-for="g in analysis.genres.slice(0, 12)" :key="g.genre">
+                        <td>{{ g.genre }}</td>
+                        <td>{{ g.count }}</td>
+                        <td><span class="corr-value" style="color:var(--gold)">{{ g.avg_rating }}</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-head">
+              <h2 class="section-title">类型评分分布</h2>
+              <span class="section-desc">中位数越靠上、箱体越窄，说明该类型口碑越稳定</span>
+            </div>
+            <div class="chart-frame">
+              <img :src="analysis.charts.boxplot" alt="各类型评分箱线图" loading="lazy">
+            </div>
+          </template>
+
+        </div>
+      </section>
+
+      <!-- ---------------- 附近影院 ---------------- -->
+      <section class="view" v-else-if="view === 'cinema'" key="cinema">
+        <div class="view-inner">
+
+          <div class="section-head">
+            <h2 class="section-title">附近影院</h2>
+            <span class="section-desc">高德地图 Web API · 半径 5 公里</span>
+          </div>
+
+          <div class="card card-pad" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <input class="input" style="max-width:280px" v-model="city" @keyup.enter="searchCinemas"
+                   placeholder="输入城市，例如：成都">
+            <button class="btn btn-primary" @click="searchCinemas" :disabled="cinemaLoading || !city.trim()">
+              {{ cinemaLoading ? '搜索中…' : '搜索影院' }}
+            </button>
+            <span style="font-size:12px;color:var(--text-3)">
+              点击卡片用高德地图定位，卡片内可直接导航或查排片
+            </span>
+          </div>
+
+          <div v-if="cinemaLoading" class="cinema-grid" style="margin-top:20px">
+            <div v-for="n in 6" :key="n" class="skeleton" style="height:104px;border-radius:14px"></div>
+          </div>
+
+          <div v-else-if="cinemaError" class="empty">
+            <div class="empty-icon">📍</div>
+            <div class="empty-title">{{ cinemaError }}</div>
+            <div class="empty-desc">可在 config/config.yaml 的 amap.api_key 配置高德 Key</div>
+          </div>
+
+          <div v-else-if="cinemas.length" class="cinema-grid" style="margin-top:20px">
+            <a v-for="(c, i) in cinemas" :key="i" class="card card-hover cinema-card"
+               :href="c.map_url || ('https://www.amap.com/search?query=' + encodeURIComponent(c.name))"
+               target="_blank" rel="noopener" :title="'在高德地图中查看：' + c.name">
+              <div class="cinema-idx">{{ i + 1 }}</div>
+              <div style="min-width:0;flex:1">
+                <div class="cinema-name">{{ c.name }}</div>
+                <div class="cinema-addr">{{ c.address }}</div>
+                <div class="cinema-meta">
+                  <span class="tag">📍 距中心 {{ c.distance }}</span>
+                  <span v-if="c.rating" class="tag">⭐ {{ c.rating }}</span>
+                  <span v-if="c.tel" class="tag">☎ {{ c.tel }}</span>
+                </div>
+                <div class="cinema-actions">
+                  <span v-if="c.nav_url" class="cinema-act"
+                        @click.stop.prevent="openUrl(c.nav_url)">🧭 导航到这里</span>
+                  <span v-if="c.ticket_url" class="cinema-act"
+                        @click.stop.prevent="openUrl(c.ticket_url)">🎟️ 查排片购票</span>
+                  <span class="cinema-act cinema-act-map">🗺️ 地图详情</span>
+                </div>
+              </div>
+            </a>
+          </div>
+
+          <div v-else class="empty">
+            <div class="empty-icon">🏢</div>
+            <div class="empty-title">输入城市开始搜索</div>
+            <div class="empty-desc">例如「成都」「北京朝阳」</div>
+          </div>
+
+        </div>
+      </section>
+
+    </transition>
+  </main>
+
+  <!-- ================= 电影详情抽屉 ================= -->
+  <transition name="mask">
+    <div class="drawer-mask" v-if="drawerOpen" @click="drawerOpen = false"></div>
+  </transition>
+  <transition name="drawer">
+    <aside class="drawer" v-if="drawerOpen && drawerMovie">
+      <button class="drawer-close" @click="drawerOpen = false">✕</button>
+
+      <div class="drawer-head">
+        <div class="drawer-poster">
+          <img v-if="drawerMovie.poster" :src="drawerMovie.poster" :alt="drawerMovie.title">
+          <div v-else class="poster-empty">
+            <div class="poster-empty-icon">🎞️</div>
+            <div class="poster-empty-text">暂无海报</div>
+          </div>
+        </div>
+        <div style="min-width:0">
+          <div class="drawer-title">{{ drawerMovie.title }}</div>
+          <div class="drawer-meta">
+            <span class="tag tag-gold">{{ drawerMovie.year || '年份未知' }}</span>
+            <span class="tag">{{ drawerMovie.genre }}</span>
+            <span v-if="drawerMovie.region" class="tag">{{ drawerMovie.region }}</span>
+            <span v-if="drawerMovie.duration" class="tag">{{ drawerMovie.duration }} 分钟</span>
+          </div>
+          <div style="margin-top:14px;font-size:12.5px;color:var(--text-2)">
+            导演：{{ drawerMovie.director || '未知' }}<br>
+            主演：{{ drawerMovie.actors || '未知' }}
+          </div>
+        </div>
+      </div>
+
+      <div class="rating-block">
+        <div class="rating-cell">
+          <div class="v" style="color:var(--gold)">{{ fmt(drawerMovie.douban_rating) }}</div>
+          <div class="l">豆瓣评分</div>
+        </div>
+        <div class="rating-cell">
+          <div class="v">{{ fmt(drawerMovie.maoyan_rating) }}</div>
+          <div class="l">猫眼评分</div>
+        </div>
+        <div class="rating-cell">
+          <div class="v">{{ fmt(drawerMovie.imdb_rating) }}</div>
+          <div class="l">IMDb</div>
+        </div>
+      </div>
+
+      <div v-if="drawerMovie.good_rate != null" style="margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:7px">
+          <span style="color:var(--text-2)">好评率</span>
+          <span style="color:var(--green);font-weight:650">{{ drawerMovie.good_rate }}%</span>
+        </div>
+        <div class="bar"><div class="bar-fill green" :style="{ width: drawerMovie.good_rate + '%' }"></div></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:6px">样本 {{ drawerMovie.review_count }} 条</div>
+      </div>
+
+      <div class="eyebrow" style="margin-bottom:9px">剧情简介</div>
+      <p class="drawer-summary">{{ drawerMovie.summary }}</p>
+
+      <template v-if="drawerDetail">
+        <div class="eyebrow" style="margin:24px 0 11px">精选评论</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div v-for="(r, i) in drawerReviews" :key="i" class="review-item">
+            <div class="review-meta">
+              <span class="review-user">{{ r.username || '用户' }}</span>
+              <span class="tag" :class="r.rating >= 7 ? 'tag-green' : 'tag-red'">{{ r.rating }} 分</span>
+            </div>
+            <div class="review-body">{{ r.content }}</div>
+          </div>
+        </div>
+
+        <div v-if="drawerDetail.similar && drawerDetail.similar.length">
+          <div class="eyebrow" style="margin:24px 0 11px">相似推荐</div>
+          <div class="movie-grid" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px">
+            <div v-for="s in drawerDetail.similar" :key="s.title" class="movie-card" @click="openMovie(s.title)">
+              <div class="movie-poster">
+                <img v-if="s.poster" :src="s.poster" :alt="s.title" loading="lazy">
+                <div v-else style="font-size:13px;opacity:.28;display:grid;place-items:center;height:100%">🎬</div>
+              </div>
+              <div class="movie-info" style="padding:9px 10px 11px">
+                <div class="movie-title" style="font-size:12px">{{ s.title }}</div>
+                <div class="movie-sub">豆瓣 {{ fmt(s.douban_rating) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <div style="margin-top:26px;display:flex;gap:10px">
+        <button class="btn btn-primary" @click="askAboutMovie(drawerMovie.title)">💬 和影探聊聊这部</button>
+      </div>
+    </aside>
+  </transition>
+
+  <!-- ================= 提示条 ================= -->
+  <div class="toast-stack">
+    <transition-group name="toast">
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">
+        <span>{{ t.type === 'err' ? '⚠️' : '✅' }}</span><span>{{ t.text }}</span>
+      </div>
+    </transition-group>
+  </div>
+
+</div>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

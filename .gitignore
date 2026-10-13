@@ -1,0 +1,48 @@
+# =====================================================
+# 电影查询智能体 .gitignore
+# 注意：gitignore 不支持行尾注释，说明一律单独成行
+# =====================================================
+
+# --- 密钥与本地私有配置（最重要）---
+config/config.yaml
+.env
+.env.*
+*.key
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# --- IDE / 编辑器 ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- 大文件与可再生成产物（克隆后自动重建）---
+models_cache/
+data/vector_db/
+data/vector_db_bak_*/
+data/posters/
+data/cleaned/*.bak_*
+data/cleaned/*.bak
+*.log
+
+# --- 工作/临时目录（截图、浏览器 profile、测试脚本）---
+.tmp/
+.npm-cache/
+
+# --- 个人材料 ---
+简历-项目经历-电影智能体.md
+
+# --- 操作系统 ---
+Thumbs.db
+Desktop.ini
+.DS_Store
