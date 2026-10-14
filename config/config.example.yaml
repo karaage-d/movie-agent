@@ -2,22 +2,21 @@
 # 电影查询智能体 - 配置模板
 # 用法：复制本文件为 config.yaml，再填入自己的 Key
 #   Windows:  copy config\config.example.yaml config\config.yaml
-#   或直接设置环境变量 DASHSCOPE_API_KEY / AMAP_API_KEY（优先级低于本文件）
+#   或直接设置环境变量 DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / AMAP_API_KEY
 # ⚠️ config.yaml 已被 .gitignore 忽略，请勿把真实 Key 提交到仓库
 # =====================================================
 
 # ---- 模型配置 ----
 model:
-  provider: "qwen"              # qwen(主用) / ollama / openai
-  # 通义千问（申请：https://dashscope.console.aliyun.com/）
-  qwen_model: "qwen-plus"       # 可选: qwen-turbo / qwen-plus / qwen-max
-  qwen_api_key: ""              # ⚠️ 在这里填入你的 DashScope API Key，或设置环境变量 DASHSCOPE_API_KEY
-  # --- DeepSeek（申请：https://platform.deepseek.com/api_keys）---
-  # 模型名可选 deepseek-flash / deepseek-v4-pro（两者都支持 Function Calling）
+  provider: "deepseek"          # deepseek(默认) / qwen / ollama / openai
+  # --- DeepSeek（默认，申请：https://platform.deepseek.com/api_keys）---
   deepseek_model: "deepseek-flash"
-  deepseek_api_key: ""                      # 或设置环境变量 DEEPSEEK_API_KEY
+  deepseek_api_key: ""                      # ⚠️ 填这里，或设置环境变量 DEEPSEEK_API_KEY
   deepseek_base_url: "https://api.deepseek.com"
-  deepseek_thinking: false                  # 思考模式；工具调用场景建议关闭，响应更快更省
+  deepseek_thinking: false                  # 思考模式；工具调用场景关闭更快更省
+  # --- 通义千问（备选，申请：https://dashscope.console.aliyun.com/）---
+  qwen_model: "qwen-plus"       # 可选: qwen-turbo / qwen-plus / qwen-max
+  qwen_api_key: ""                          # 用 qwen 时填这里，或设置 DASHSCOPE_API_KEY
 
   # --- Ollama（备选，本地模型）---
   ollama_model: "qwen-plus"
@@ -31,8 +30,8 @@ model:
 
 # ---- Embedding ----
 embedding:
-  provider: "qwen"              # qwen(在线,零本地依赖) / bge / m3e
-  model_name: "text-embedding-v3"
+  provider: "bge"               # bge(本地,默认,无需 Key) / qwen(在线,需 DashScope Key) / m3e
+  model_name: "BAAI/bge-small-zh-v1.5"   # bge 填本地模型名；qwen 则填 text-embedding-v3
   cache_dir: "./models_cache"
 
 # ---- 向量库 ----
