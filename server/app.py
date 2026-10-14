@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""
-电影查询智能体 - 标准库 HTTP API 服务
+"""电影查询智能体 HTTP API 服务。
 
-只依赖 Python 标准库（http.server / socketserver / json / urllib.parse / threading 等），
-不需要 fastapi / flask / uvicorn 等任何第三方 Web 框架。
+只用 Python 标准库（http.server / json / threading 等），不依赖任何 Web 框架。
 
-运行方式（在项目根目录，或任意目录均可）：
+运行（在项目根目录或任意目录均可）：
     python server/app.py
 
 服务地址： http://127.0.0.1:8765
 
-设计要点：
-  1. 启动时先用后台线程初始化 LLM + 知识库，HTTP 服务立即可用；
-  2. 初始化进度/失败原因通过 GET /api/status 暴露，失败不会让服务崩溃；
-  3. 使用 ThreadingHTTPServer，聊天请求不会阻塞其它请求；
-  4. MovieAgent 是共享单例（内部有多轮对话历史），chat 调用必须在锁里串行；
-  5. 所有响应均为 application/json; charset=utf-8（图片接口除外），NaN/NaT 统一转 null。
+实现要点：
+  1. 启动时用后台线程初始化 LLM 与知识库，HTTP 服务立即可用；
+  2. 初始化进度与失败原因通过 GET /api/status 暴露，初始化失败不会让服务退出；
+  3. ThreadingHTTPServer，聊天请求不阻塞其它请求；
+  4. MovieAgent 是共享单例且带多轮对话历史，chat 调用需在锁内串行；
+  5. 响应统一为 application/json; charset=utf-8（图片接口除外），NaN/NaT 转 null。
 """
 import json
 import math
@@ -29,11 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-# ----------------------------------------------------------------------------
-# 路径设置：server/app.py -> ROOT_DIR = D:\movie-agent
-# 参考 main.py 中 sys.path.insert(0, str(ROOT_DIR)) 的做法，
-# 保证 `from src.xxx import ...` 在任何工作目录下都能正常工作。
-# ----------------------------------------------------------------------------
+# server/app.py -> 项目根目录。与 main.py 一样先插入 sys.path，
+# 保证从任意工作目录启动时 `from src.xxx import ...` 都能解析。
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -86,9 +81,7 @@ CHAT_TIMEOUT_SEC = 90.0
 ANALYSIS_CACHE_SEC = 600.0
 
 
-# ----------------------------------------------------------------------------
 # 通用小工具
-# ----------------------------------------------------------------------------
 def json_default(obj):
     """让 numpy / pandas 的标量类型可以被 json 序列化。"""
     try:
@@ -182,9 +175,7 @@ def split_list(raw):
     return [p.strip() for p in parts if p.strip() and p.strip().lower() != "nan"]
 
 
-# ----------------------------------------------------------------------------
 # 应用状态（全局单例）
-# ----------------------------------------------------------------------------
 class AppState:
     """进程级共享状态：配置、数据、模型、分析缓存。"""
 
@@ -216,7 +207,7 @@ class AppState:
 
         self.good_threshold = 7.0
 
-    # ---------------- 状态 ----------------
+    # 状态
     def status(self):
         with self.init_lock:
             return {
@@ -230,7 +221,7 @@ class AppState:
                 "error": self.error,
             }
 
-    # ---------------- 配置 ----------------
+    # 配置
     def load_config_once(self):
         """加载配置 + CSV 数据 + 快速统计，返回是否成功。"""
         if self.cfg is not None:
@@ -331,7 +322,7 @@ class AppState:
             self.error = message
         print(f"[server] ERROR: {message}", flush=True)
 
-    # ---------------- 初始化 ----------------
+    # 初始化
     def start_init(self):
         """后台线程加载 LLM + 知识库 + Agent，不阻塞 HTTP 服务。"""
         if not self.load_config_once():
@@ -380,7 +371,7 @@ class AppState:
             with self.init_lock:
                 self.initializing = False
 
-    # ---------------- 数据辅助 ----------------
+    # 数据辅助
     def require_data(self):
         if self.cfg is None:
             self.load_config_once()
@@ -512,9 +503,7 @@ class AppState:
 APP = AppState()
 
 
-# ----------------------------------------------------------------------------
 # 海报文件查找
-# ----------------------------------------------------------------------------
 def _safe_name(title):
     """标题 -> 文件名（Windows 非法字符替换为 _）。"""
     return ILLEGAL_FILENAME_CHARS.sub("_", str(title)).strip()
@@ -535,14 +524,13 @@ def _normalized(s):
 
 
 def find_poster_file(title):
-    """在 data/posters 下查找海报。
+    """在 data/posters 下按文件名查找海报。
 
-    匹配顺序：1. 精确文件名；2. 忽略大小写；3. 去掉标点后相等（容忍「，」/「,」差异）。
+    匹配顺序：精确文件名、忽略大小写、去掉标点后相等（容忍「，」与「,」差异）。
 
-    这里**刻意不做"包含/前缀"模糊匹配**。曾经的兜底会让《功夫》命中「功夫熊猫.jpg」、
-    《阿凡达》命中「阿凡达：火与烬.jpg」、《唐人街探案2》命中「唐人街探案.jpg」，
-    把另一部电影的海报显示给用户——这种张冠李戴比"暂无海报"更糟。
-    库里缺图就应该老实显示"暂无海报"，然后用 scripts/fetch_posters.py 补齐。
+    不做包含/前缀匹配：库里同时存在《功夫》和《功夫熊猫》这类互为前缀的片名时，
+    模糊匹配会把另一部电影的海报显示给用户，比返回 None 更糟。
+    缺图应由 scripts/fetch_posters.py 补齐。
     """
     title = to_str(title)
     if not title or not POSTER_DIR.is_dir():
@@ -581,14 +569,12 @@ def find_chart_file(name):
     return None
 
 
-# ----------------------------------------------------------------------------
 # HTTP 处理
-# ----------------------------------------------------------------------------
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "MovieAgentHTTP/1.0"
     protocol_version = "HTTP/1.1"
 
-    # ---------- 基础输出 ----------
+    # 基础输出
     def _send_bytes(self, status, body, content_type, extra_headers=None):
         try:
             self.send_response(status)
@@ -620,7 +606,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             content_type = MIME_TYPES.get(Path(path).suffix.lower(), "application/octet-stream")
         self._send_bytes(200, data, content_type, [("Cache-Control", "no-cache")])
 
-    # ---------- 请求分发 ----------
+    # 请求分发
     def do_GET(self):
         try:
             self._route_get()
@@ -644,7 +630,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
-    # ---------- GET 路由 ----------
+    # GET 路由
     def _route_get(self):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
@@ -673,7 +659,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         else:
             self.serve_static(path)
 
-    # ---------- POST 路由 ----------
+    # POST 路由
     def _route_post(self):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
@@ -703,7 +689,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             return {}
 
-    # ---------- 接口实现 ----------
+    # 接口实现
     def api_movies(self, keyword, genre, sort, limit):
         APP.require_data()
         df = APP.movies_df
@@ -1027,7 +1013,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             content_type = "image/jpeg"
         self.send_file(path, content_type)
 
-    # ---------- 静态文件 ----------
+    # 静态文件
     def serve_static(self, path):
         path = path or "/"
         if path.endswith("/"):

@@ -1,18 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-电影院搜索 & 购票链接模块
-使用高德地图 API 搜索附近电影院，生成地图导航链接与购票搜索链接
-"""
+"""电影院搜索与购票链接，数据来自高德地图 Web API。"""
 import urllib.parse
 
 import requests
 
 
 def amap_marker_url(name: str, location: str = "") -> str:
-    """高德地图标注页：有坐标就精确定位，没坐标就按「影院名 + 城市」搜索。
-
-    实测 uri.amap.com/marker 会 302 到 ditu.amap.com/regeo，网页端可直接打开。
-    """
+    """高德地图标注页。有坐标就精确定位，否则按影院名搜索。"""
     name = str(name or "").strip()
     if location and "," in location:
         return "https://uri.amap.com/marker?position={}&name={}".format(
@@ -21,7 +15,7 @@ def amap_marker_url(name: str, location: str = "") -> str:
 
 
 def amap_navigation_url(name: str, location: str) -> str:
-    """高德导航链接：手机端会唤起 App，桌面浏览器打开网页版路线规划。"""
+    """高德导航链接，桌面浏览器打开网页版路线规划。"""
     if not location or "," not in location:
         return ""
     return "https://uri.amap.com/navigation?to={},{}&mode=car&coordinate=gaode&callnative=0".format(
@@ -29,11 +23,7 @@ def amap_navigation_url(name: str, location: str) -> str:
 
 
 def ticket_search_url(cinema_name: str) -> str:
-    """购票搜索链接（猫眼搜索「影院名 电影票」）。
-
-    说明：猫眼对爬虫返回 403，但这是给**用户浏览器**点的链接，可以正常打开，
-    因此只做链接跳转，不做服务端抓取。
-    """
+    """购票搜索链接。猫眼对爬虫返回 403，但这是给浏览器点击的跳转链接。"""
     kw = f"{str(cinema_name or '').strip()} 电影票"
     return "https://www.maoyan.com/query?kw=" + urllib.parse.quote(kw)
 

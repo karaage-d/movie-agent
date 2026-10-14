@@ -1,17 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Agent 的两类新工具实现
-
-1. list_movies      —— 按年份/类型/最低评分从**本地知识库**筛片单
-                       （解决「2025年有哪些电影」「有什么科幻片」这类提问：
-                        原来 7 个工具全是"已知片名查详情"，没有列片单能力）
-
-2. search_movie_web —— **本地优先、联网兜底** 的影片查询
-                       先查本地知识库；查不到才去豆瓣实时抓取（src/movie_online.py）
-
-设计原则：工具只负责取数与拼装文本，是否调用由 LLM 决定；
-本地命中时绝不发起网络请求，保证「知识库已有的电影优先走知识库」。
-"""
+"""Agent 工具实现：片单筛选与影片查询。"""
 import os
 import re
 
@@ -21,7 +9,7 @@ from src.utils import logger, ROOT_DIR, rating_label
 
 
 class MovieTools:
-    """把本地数据能力 + 联网能力包成一组成员函数，供 MovieAgent 注册成工具。"""
+    """供 MovieAgent 注册为工具的方法集合。"""
 
     def __init__(self, cfg, kb, crawler=None, online=None):
         self.cfg = cfg
@@ -30,10 +18,9 @@ class MovieTools:
         self.online = online
         self._df = None
 
-    # ---------------- 本地数据 ----------------
     @property
     def df(self):
-        """延迟加载本地电影表（只读一次）。"""
+        """本地电影表，延迟加载一次。"""
         if self._df is None:
             path = ROOT_DIR / self.cfg["data"]["movies_csv"]
             if path.exists():
@@ -56,7 +43,7 @@ class MovieTools:
         return (int(years.min()), int(years.max()))
 
     def has_local(self, name):
-        """本地知识库是否有这部片（包含匹配，等价于 kb.get_movie_info 的行为）。"""
+        """本地是否存在该片名（包含匹配，与 kb.get_movie_info 行为一致）。"""
         name = str(name or "").strip()
         if not name or self.df.empty:
             return False
@@ -65,15 +52,13 @@ class MovieTools:
         except Exception:
             return False
 
-    # ---------------- 工具 1：列片单 ----------------
     def list_movies(self, year: str = "", genre: str = "", min_rating: float = 0, limit: int = 15) -> str:
-        """按条件列出本地知识库里的电影片单。
+        """按年份、类型、评分筛选本地影片。
 
-        参数:
-            year: 年份筛选，可填 "2025" 或 "2020-2025" 这样的区间；留空表示不限
-            genre: 类型关键词，如 "科幻"、"喜剧"；留空表示不限
-            min_rating: 最低豆瓣评分，如 8 表示只要 8 分以上；0 表示不限
-            limit: 最多返回多少部
+        year: "2025" 或 "2020-2025" 区间，留空不限
+        genre: 类型关键词，如 "科幻"，留空不限
+        min_rating: 最低豆瓣评分，0 表示不限
+        limit: 返回条数上限
         """
         if self.df.empty:
             return "本地电影数据为空，请先运行数据清洗（python main.py --clean）。"
@@ -136,18 +121,15 @@ class MovieTools:
         lines.append("\n如需某部影片的详细信息、评论、海报，可继续调用对应工具。")
         return "\n".join(lines)
 
-    # ---------------- 工具 2：本地优先 + 联网兜底 ----------------
     def search_movie_web(self, movie_name: str) -> str:
-        """查询影片信息：优先本地知识库，本地没有才联网爬取豆瓣实时数据。
+        """查询影片信息，先查本地知识库，未收录再联网抓取。
 
-        参数:
-            movie_name: 电影名称
+        movie_name: 电影名称
         """
         name = str(movie_name or "").strip()
         if not name:
             return "请提供电影名称。"
 
-        # ① 本地优先
         info = None
         try:
             info = self.kb.get_movie_info(name)
@@ -176,11 +158,10 @@ class MovieTools:
                 lines.append(f"\n📝 简介: {info['summary']}")
             return "\n".join(lines)
 
-        # ② 联网兜底
         if self.online is None:
             return f"本地知识库没有《{name}》，且联网数据源不可用。"
 
-        logger.info(f"本地未收录《{name}》，转联网抓取豆瓣…")
+        logger.info(f"本地未收录《{name}》，转联网抓取豆瓣")
         detail, candidates = None, []
         try:
             detail, candidates = self.online.search_detail(name)
@@ -190,7 +171,6 @@ class MovieTools:
         if detail:
             return self.online.format_for_agent(detail, candidates)
 
-        # ③ 都失败：如实说明，绝不编造
         err = getattr(self.online, "last_error", "") or ""
         lo, hi = self.local_year_range()
         tip = f"本地知识库当前收录 {len(self.local_titles())} 部影片（年份 {lo}-{hi}）。" if lo else ""

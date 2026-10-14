@@ -45,7 +45,7 @@ class MovieCrawler:
         safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)
         save_path = self.posters_dir / f"{safe_title}.jpg"
         if save_path.exists() and save_path.stat().st_size > 2000:
-            # 已经下载过且文件大小正常（>2KB基本不是HTML错页）
+            # 已有文件且大小正常（>2KB 基本不是 HTML 错页）
             ok = False
             try:
                 from PIL import Image
@@ -56,17 +56,16 @@ class MovieCrawler:
             except Exception:
                 save_path.unlink(missing_ok=True)   # 文件损坏，重新下载
             if ok:
-                # 豆瓣默认返回 s_ratio_poster（270x377）小图，若之前只存下小图，
-                # 直接短路返回会让大图永远没机会补下 —— 要升级大图时低于 200px 视为缩略图，重下
+                # 豆瓣默认给 s_ratio_poster（270x377）小图，若缓存里只有小图，
+                # 这里直接返回会导致大图永远补不上，所以低于 200px 时重新下载
                 if try_variants and (w < 200 or h < 200):
                     save_path.unlink(missing_ok=True)
                     logger.info(f"已有海报过小({w}x{h})，重新下载大图: {title}")
                 else:
                     return str(save_path)
 
-        # 生成要尝试的URL变体：优先大图，再退回原URL
-        # （豆瓣有 s/m/l_ratio_poster 多种尺寸，CDN 有 img1/3/9 多个子域名；
-        #   若先把原始 s_ 小图排在前面，会直接命中 270x377 的缩略图）
+        # 候选 URL：大图优先，原始地址兜底。豆瓣尺寸有 s/m/l_ratio_poster，
+        # CDN 有 img1/3/9 等子域名；若把 s_ 小图排在前面会直接命中缩略图。
         urls_to_try = [url]
         if try_variants:
             variants = []
@@ -82,26 +81,23 @@ class MovieCrawler:
                 r = requests.get(try_url, headers=self.headers, timeout=15, allow_redirects=True)
                 r.raise_for_status()
                 content = r.content
-                # 严格校验：必须是真实图片
                 ct = r.headers.get("Content-Type", "").lower()
                 is_image = "image" in ct or content[:3] in (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"RIFF")
                 if not is_image or len(content) < 1000:
                     logger.warning(f"海报非图片或太小({len(content)}B): {try_url} ct={ct}")
                     continue
-                # 用PIL验证图片完整性
                 try:
                     from io import BytesIO
                     from PIL import Image
                     im = Image.open(BytesIO(content))
                     im.verify()
-                    # 重新打开（verify后指针已坏）
+                    # verify() 之后指针已失效，需要重新打开
                     im = Image.open(BytesIO(content))
                     im.load()
                     w, h = im.size
                     if w < 50 or h < 50:
                         logger.warning(f"海报尺寸太小 {w}x{h}: {try_url}")
                         continue
-                    # 统一转JPEG保存
                     if im.mode not in ("RGB", "L"):
                         im = im.convert("RGB")
                     im.save(save_path, "JPEG", quality=88)

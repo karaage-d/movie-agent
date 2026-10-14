@@ -12,11 +12,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def setup_model_cache():
-    """把 HuggingFace / sentence-transformers / torch 的缓存全部锁定到项目内的 models_cache/
+    """把 HuggingFace / sentence-transformers / torch 的缓存目录锁定到项目内的 models_cache/。
 
-    默认情况下这些库会把模型下载到 C:\\Users\\<用户>\\.cache\\huggingface（动辄几个 GB，
-    和项目分离，换机器就得重下）。统一指向项目目录后，模型跟着项目走，拷走整个文件夹即可。
-    使用 setdefault：外部若已显式设置同名环境变量，仍以外部为准。
+    这些库默认下载到 C:\\Users\\<用户>\\.cache\\huggingface，与项目分离；统一指向项目目录后
+    模型随项目走。用 setdefault，外部显式设置的同名环境变量优先。
     """
     cache_root = ROOT_DIR / "models_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -24,7 +23,7 @@ def setup_model_cache():
     os.environ.setdefault("HF_HUB_CACHE", str(cache_root))
     os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(cache_root / "sentence_transformers"))
     os.environ.setdefault("TORCH_HOME", str(cache_root / "torch"))
-    # 国内直连 huggingface.co 往往超时，默认走镜像；有代理/梯子可在外部覆盖此变量
+    # 直连 huggingface.co 容易超时，默认走镜像，有代理可在外部覆盖
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 

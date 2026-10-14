@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-模型加载器：统一加载 LLM 和 Embedding 模型
+"""模型加载器：统一加载 LLM 和 Embedding。
 
-LLM 支持：通义千问(qwen) / DeepSeek / OpenAI / 本地 Ollama
-Embedding 支持：通义在线(text-embedding-v3) / 本地 BGE / M3E
+LLM 支持通义千问(qwen) / DeepSeek / OpenAI / 本地 Ollama；
+Embedding 支持通义在线(text-embedding-v3) / 本地 BGE / M3E。
 
-qwen、DeepSeek、OpenAI 三家都走 OpenAI 兼容接口，共用同一套自研 BaseChatModel 封装
-（含 bind_tools 与 tool_calls 编解码），因此换模型只需改 config.yaml，无需改代码。
+qwen、DeepSeek、OpenAI 都走 OpenAI 兼容接口，共用下方自研的 BaseChatModel 封装
+（含 bind_tools 与 tool_calls 编解码），换模型只需改 config.yaml。
 """
 import os
 
 from src.utils import logger, setup_model_cache
 
-# 本地向量模型（bge/m3e）会把模型缓存到 HF_HOME；必须在导入
-# huggingface_hub / sentence_transformers 之前锁定到项目内的 models_cache/
+# 本地向量模型（bge/m3e）的缓存目录要在导入 huggingface_hub /
+# sentence_transformers 之前确定，否则会落到用户目录
 setup_model_cache()
 
-# ---- 各家的 OpenAI 兼容端点 ----
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -35,7 +33,7 @@ def load_llm(cfg):
     temperature = m["temperature"]
     max_tokens = m["max_tokens"]
 
-    # ---------------- 通义千问 ----------------
+    # 通义千问
     if provider == "qwen":
         api_key = m.get("qwen_api_key") or _env("DASHSCOPE_API_KEY")
         if not api_key:
@@ -60,7 +58,7 @@ def load_llm(cfg):
             },
         )
 
-    # ---------------- DeepSeek ----------------
+    # DeepSeek
     elif provider == "deepseek":
         api_key = m.get("deepseek_api_key") or _env("DEEPSEEK_API_KEY")
         if not api_key:
@@ -81,7 +79,7 @@ def load_llm(cfg):
             extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}},
         )
 
-    # ---------------- OpenAI ----------------
+    # OpenAI
     elif provider == "openai":
         api_key = m.get("openai_api_key") or _env("OPENAI_API_KEY")
         if not api_key:
@@ -96,7 +94,7 @@ def load_llm(cfg):
             api_key, model_name, temperature, max_tokens, base_url=base_url,
         )
 
-    # ---------------- 本地 Ollama ----------------
+    # 本地 Ollama
     elif provider == "ollama":
         try:
             from langchain_ollama import ChatOllama
@@ -245,8 +243,8 @@ def _make_openai_chat(api_key, model_name, temperature, max_tokens, base_url,
 
             new_model = OpenAICompatChatModel()
             new_model._tools = api_tools
-            # 新实例不会自动继承 extra_body，必须显式复制，
-            # 否则 bind_tools 之后通义的联网搜索 / DeepSeek 的思考模式开关会丢失
+            # 新实例不会继承 extra_body，需显式复制，
+            # 否则 bind_tools 后通义的联网搜索 / DeepSeek 的思考开关会丢失
             new_model._extra_body = dict(self._extra_body)
             return new_model
 
@@ -254,7 +252,7 @@ def _make_openai_chat(api_key, model_name, temperature, max_tokens, base_url,
 
 
 def load_embedding(cfg):
-    """加载Embedding模型"""
+    """按配置加载 Embedding 模型。"""
     provider = cfg["embedding"]["provider"].lower()
 
     if provider == "qwen":

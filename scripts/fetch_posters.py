@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-补全缺失的本地海报（数据源：豆瓣公开 suggest 接口，无需 API Key）
+"""补全缺失的本地海报，数据源为豆瓣公开 suggest 接口，无需 API Key。
 
-用法（在项目根目录）：
-    .venv\\Scripts\\python.exe scripts\\fetch_posters.py            # 只补缺的
-    .venv\\Scripts\\python.exe scripts\\fetch_posters.py --limit 5  # 先试 5 部
-    .venv\\Scripts\\python.exe scripts\\fetch_posters.py --retry    # 忽略已有大图，重下小图
+用法（项目根目录）：
+    .venv\\Scripts\\python.exe scripts\\fetch_posters.py            # 补缺的
+    .venv\\Scripts\\python.exe scripts\\fetch_posters.py --limit 5  # 只处理 5 部
+    .venv\\Scripts\\python.exe scripts\\fetch_posters.py --retry    # 重下已有的小图
 
-做的事：
-  1. 读 data/cleaned/movies.csv 的片名；
-  2. 缺海报的逐个查豆瓣，把 CDN 小图 URL 升级成大图后下载到 data/posters/<片名>.jpg；
-  3. 图片经过 PIL 校验（能打开、尺寸 >= 200px），不达标就丢弃；
-  4. 把命中的海报 URL 回写到 movies.csv 的 poster_url 列，避免下次重复查询。
+流程：读 movies.csv 片名 -> 缺图的查豆瓣 -> 小图升级大图后存到 data/posters/ ->
+PIL 校验尺寸 -> 命中 URL 回写 movies.csv 的 poster_url 列。
 """
 import argparse
 import os
@@ -23,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-for _s in (sys.stdout, sys.stderr):          # Windows 控制台默认 GBK，日志里有 emoji
+for _s in (sys.stdout, sys.stderr):          # Windows 控制台默认 GBK，日志含 emoji
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -35,11 +31,10 @@ from PIL import Image
 from src.utils import load_config
 from src.crawler import MovieCrawler
 
-CSV_PATH = ROOT / "config" / "config.yaml"
-MIN_SIDE = 200          # 最小边长，低于此值视为占位图/缩略图
+MIN_SIDE = 200          # 小于此边长视为缩略图
 MIN_BYTES = 3000
 
-# 豆瓣搜索对这些片名命中不了（系列续作改名 / 译名不一致），人工给别名
+# 豆瓣搜不到的名字（系列改名、译名不一致），人工补充别名
 ALIASES = {
     "哪吒之魔童闹海": ["哪吒2", "哪吒之魔童闹海 哪吒2", "哪吒2之魔童闹海"],
     "哪吒之魔童降世": ["哪吒之魔童降世 哪吒1", "哪吒降世"],
@@ -52,11 +47,9 @@ ALIASES = {
     "蛟龙行动": ["蛟龙行动 红海行动2", "红海行动2"],
 }
 
-# 豆瓣限流时会返回空数组（HTTP 200）。连续失败说明又快把自己打进限流了，
-# 所以退避要够长，宁可慢一点也别触发风控。
+# 豆瓣限流时返回空数组（HTTP 200），退避要够长
 BACKOFF_SECONDS = (15, 45, 90)
-# 每成功处理 N 部插入一次长休息
-BATCH_SIZE = 8
+BATCH_SIZE = 8          # 每处理这么多部休息一次
 BATCH_REST_SECONDS = 20
 
 
@@ -78,7 +71,7 @@ def has_good_poster(crawler, title):
 
 
 def candidate_names(title):
-    """依次尝试的片名：原片名 -> 去副标题 -> 人工别名"""
+    """依次尝试的片名：原名、去副标题、人工别名。"""
     seen = set()
     names = [title, re.split(r"[：:]", title)[0].strip()]
     names += ALIASES.get(title, [])
@@ -89,7 +82,7 @@ def candidate_names(title):
 
 
 def search_with_backoff(crawler, name):
-    """豆瓣限流时返回空数组，按 BACKOFF_SECONDS 递增等待重试"""
+    """豆瓣限流时返回空数组，按 BACKOFF_SECONDS 递增等待后重试。"""
     for attempt, wait in enumerate((0,) + BACKOFF_SECONDS):
         if wait:
             time.sleep(wait)
@@ -105,7 +98,7 @@ def search_with_backoff(crawler, name):
 
 
 def big_url(url):
-    """豆瓣 CDN 的 s_/m_ 小图升级为 l_ 大图"""
+    """把豆瓣 CDN 的 s_/m_ 小图地址换成 l_ 大图。"""
     return re.sub(r"/(s|m)_ratio_poster/", "/l_ratio_poster/", url or "")
 
 
@@ -122,7 +115,7 @@ def main():
     df = pd.read_csv(movies_csv, encoding="utf-8-sig")
     if "poster_url" not in df.columns:
         df["poster_url"] = ""
-    # 全空列会被推断成 float64，直接写字符串会抛 LossySetitemError，先转成 object
+    # 全空列会被推断成 float64，写入字符串会抛 LossySetitemError
     df["poster_url"] = df["poster_url"].astype("object").fillna("")
 
     titles = [str(t).strip() for t in df["title"].tolist()]
@@ -148,8 +141,8 @@ def main():
                     break
             time.sleep(0.4)
 
-        # 校验下载结果
         if got and not has_good_poster(crawler, title):
+            # 尺寸不达标（多半是占位图），丢弃重来
             try:
                 os.remove(got)
             except OSError:
@@ -159,9 +152,8 @@ def main():
         if got:
             with Image.open(got) as im:
                 w, h = im.size
-            # 记录本次实际生效的 URL（大图失败时 download_poster 会退回小图变体）
-            record_url = big_url(raw)
-            df.loc[df["title"].astype(str).str.strip() == title, "poster_url"] = record_url
+            # 大图变体失败时 download_poster 会退回小图，这里记录实际使用的地址
+            df.loc[df["title"].astype(str).str.strip() == title, "poster_url"] = big_url(raw)
             done.append(title)
             print(f"  [{i:>2}/{len(todo)}] {title:<20} ✅ {w}x{h}  {source}")
         else:
@@ -174,7 +166,6 @@ def main():
             sys.stdout.flush()
             time.sleep(BATCH_REST_SECONDS)
 
-    # 回写 poster_url，避免下次重复查豆瓣
     df.to_csv(movies_csv, index=False, encoding="utf-8-sig")
     print(f"\n补齐 {len(done)} 部，失败 {len(failed)} 部")
     if failed:

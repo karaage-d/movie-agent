@@ -236,7 +236,7 @@ class MovieAgent:
         self._make_tool(search_nearby_cinemas, "search_nearby_cinemas",
                         "搜索附近电影院。参数: city(城市名), movie_name(电影名，可选)。")
 
-        # ---- 列片单 & 联网兜底（解决"按条件找电影"和"库外新片"两类提问）----
+        # 列片单与联网兜底：解决「按条件找电影」和「库外新片」两类提问
         from src.agent_tools import MovieTools
 
         online = None
@@ -252,13 +252,13 @@ class MovieAgent:
         self.movie_tools = mt
 
         self._make_tool(mt.list_movies, "list_movies",
-                        "按条件列出本地知识库里的电影片单。当用户问「有哪些电影」「XX年有什么新片」"
-                        "「推荐几部科幻片」「评分8分以上的片子」这类**不针对某一部片**的问题时使用。"
+                        "按条件列出本地知识库里的电影片单。适用于「有哪些电影」「XX年有什么新片」"
+                        "「推荐几部科幻片」「评分8分以上的片子」这类不针对某一部片的问题。"
                         "参数: year(年份或区间，如 2025 / 2020-2025，可留空), "
                         "genre(类型关键词，如 科幻，可留空), min_rating(最低豆瓣评分，0 表示不限), limit(返回条数)。")
         self._make_tool(mt.search_movie_web, "search_movie_web",
-                        "查询一部电影的信息：**先查本地知识库，本地没有才联网爬取豆瓣实时数据**。"
-                        "当用户提到具体片名、或本地 knowledge base 查不到该片时使用。"
+                        "查询一部电影的信息：先查本地知识库，本地没有才联网爬取豆瓣数据。"
+                        "当用户提到具体片名、或本地知识库查不到该片时使用。"
                         "参数: movie_name(电影名称)。")
 
     def _build_agent(self):

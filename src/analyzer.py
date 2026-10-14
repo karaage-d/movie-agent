@@ -14,7 +14,7 @@ from src.utils import logger, ROOT_DIR, ensure_dir
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS"]
 plt.rcParams["axes.unicode_minus"] = False
 
-# ---- 深色主题：与网页端深色界面保持一致，避免白底图表突兀 ----
+# 深色主题，与网页端界面一致，避免白底图表突兀
 DARK_BG = "#0d1016"
 DARK_FG = "#b3bbc9"
 DARK_TITLE = "#f4f6fa"
