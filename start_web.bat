@@ -11,10 +11,12 @@ echo.
 if not exist ".venv\Scripts\python.exe" (
     echo [ERROR] Virtual environment not found: .venv
     echo.
-    echo Please run the following first:
-    echo     python -m venv .venv
-    echo     .venv\Scripts\activate
-    echo     pip install -r requirements.txt
+    echo This project requires Python 3.12. Do not use 3.15 - faiss-cpu
+    echo only supports up to 3.14, so pip install fails on 3.15.
+    echo.
+    echo Run these first ^(with a Python 3.12 interpreter^):
+    echo     py -3.12 -m venv .venv
+    echo     .venv\Scripts\python.exe -m pip install -r requirements.txt
     echo.
     pause
     exit /b 1
@@ -24,9 +26,10 @@ if not exist "config\config.yaml" (
     echo [SETUP] config\config.yaml not found, copying from template...
     copy "config\config.example.yaml" "config\config.yaml" >nul
     echo.
-    echo [NEXT] Open config\config.yaml and fill in your DashScope API Key
-    echo        Apply at: https://dashscope.console.aliyun.com/
-    echo        Then run this script again.
+    echo [NEXT] Open config\config.yaml and fill in your API Key:
+    echo        - DeepSeek  : deepseek_api_key   ^(https://platform.deepseek.com^)
+    echo        - 通义千问  : qwen_api_key       ^(https://dashscope.console.aliyun.com^)
+    echo        Fill the one matching model.provider, then run this script again.
     echo.
     pause
     exit /b 1

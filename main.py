@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-电影智能体 - 主入口
+"""电影智能体主入口。
 
-使用方式：
-  1. 配置 config/config.yaml 中的 qwen_api_key
-  2. 安装依赖：pip install -r requirements.txt
-  3. 启动网页版：python main.py            （默认）
-  4. 仅清洗数据：python main.py --clean
-  5. 仅分析数据：python main.py --analyze
-  6. 重建知识库：python main.py --build-kb
-  7. 命令行对话：python main.py --chat
+用法：
+  python main.py               启动网页版（默认）
+  python main.py --clean       清洗数据
+  python main.py --analyze     关联分析
+  python main.py --build-kb    重建向量库
+  python main.py --chat        命令行对话
 """
 import sys
 import argparse
@@ -18,12 +15,24 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR))
 
-# Windows 控制台默认 GBK，项目日志和提示里有 emoji，直接 print 会抛 UnicodeEncodeError
+# Windows 控制台默认 GBK，日志与提示里有 emoji，直接 print 会抛 UnicodeEncodeError
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+# 依赖（faiss-cpu 等）没有 3.15 的轮子，提前给出可读提示而不是让 pip/import 报错
+if sys.version_info >= (3, 15):
+    print("=" * 62)
+    print(f"当前 Python 版本 {sys.version.split()[0]} 不受支持，请改用 Python 3.12。")
+    print("faiss-cpu 最高支持到 3.14，zstandard 在 3.15 没有预编译包。")
+    print()
+    print("  py -3.12 -m venv .venv")
+    print("  .venv\\Scripts\\python.exe -m pip install -r requirements.txt")
+    print("  .venv\\Scripts\\python.exe main.py")
+    print("=" * 62)
+    sys.exit(1)
 
 from src.utils import load_config, init_dirs
 
