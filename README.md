@@ -10,7 +10,7 @@
 - 预告片
 - 相似电影推荐
 - 附近影院
-- 变量关联分析（各类型评分箱线图）
+- 对话回复逐字流式输出
 
 ---
 
@@ -21,9 +21,6 @@
 
 **电影库** — 搜索 / 类型筛选 / 排序，卡片悬停浮起并预览简介
 ![电影库](docs/screenshots/02-library.png)
-
-**数据分析** — 自动洞察、相关系数表、各类型评分箱线图
-![数据分析](docs/screenshots/03-analysis.png)
 
 **对话** — 聊天气泡 + 右侧影片详情联动（评分 / 好评率 / 精选评论 / 相似推荐）
 ![对话](docs/screenshots/04-chat.png)
@@ -191,7 +188,7 @@ movie-agent/
 │   ├── data_cleaner.py        # 数据清洗
 │   ├── knowledge_base.py      # FAISS 知识库与检索
 │   ├── crawler.py             # 海报与影片信息抓取
-│   ├── analyzer.py            # 关联分析与可视化
+│   ├── analyzer.py            # 关联分析与可视化（仅命令行 --analyze，不接入网页）
 │   ├── cinema.py              # 附近影院（高德 API）
 │   └── agent.py               # 智能体（工具调用）
 ├── server/app.py              # 后端：标准库 HTTP API
@@ -211,6 +208,26 @@ movie-agent/
 
 ---
 
+## ⚡ 对话流式输出
+
+对话默认走 `POST /api/chat/stream`（Server-Sent Events），回复**逐字显示**而不是等全部生成完。
+
+事件格式（每条一行 `data: {...}`）：
+
+| type | 含义 | 前端动作 |
+|---|---|---|
+| `token` | 正文增量 | 追加到当前气泡 |
+| `tool` | 正在调用哪些工具 | 显示「正在查询：xxx」，并清空铺垫文字 |
+| `meta` | 海报 / 预告片 / 影片名 | 挂上海报卡片、联动右侧面板 |
+| `done` | 结束 | 停止光标闪动 |
+| `error` | 出错 | 显示提示 |
+
+实现要点：模型在调用工具前常说的「我来帮你查一下…」不会被推送出去
+（否则工具跑完正文重来会出现重复内容）；只有确定是最终答案的那一轮才逐块下发。
+后端不支持流式时，前端会自动回退到 `POST /api/chat` 一次性拿完整答案。
+
+---
+
 ## 🌐 接口一览
 
 全部返回 JSON，CORS 已开放。
@@ -220,14 +237,13 @@ movie-agent/
 | GET | `/api/status` | 模型与知识库初始化状态 |
 | GET | `/api/movies?q=&genre=&sort=&limit=` | 电影列表（含好评率、海报 URL） |
 | GET | `/api/movie?title=` | 影片详情 + 精选评论 + 相似推荐 |
-| POST | `/api/chat` | 对话（`{"message": "..."}`） |
+| POST | `/api/chat` | 对话，一次性返回（`{"message": "..."}`） |
+| POST | `/api/chat/stream` | **流式对话**，SSE 逐字推送（前端默认走这个） |
 | POST | `/api/chat/reset` | 清空多轮对话历史 |
-| GET | `/api/analysis` | 相关性分析结果（内存缓存 10 分钟） |
-| GET | `/api/chart/boxplot` | 类型评分箱线图 PNG |
 | GET | `/api/cinemas?city=` | 附近影院（高德地图） |
 | GET | `/api/poster?title=` | 海报图片 |
 
-前端支持深链接：`http://127.0.0.1:8765/?ask=我要看流浪地球2` 会自动发起提问，`#library` / `#analysis` 等可直接定位页面。
+前端支持深链接：`http://127.0.0.1:8765/?ask=我要看流浪地球2` 会自动发起提问，`#library` / `#cinema` 等可直接定位页面。
 
 **为什么不用 Vite / npm？** 网页端刻意做成零构建：Vue 3 运行时随仓库提供，静态资源由同一个 Python 进程托管，用户克隆后 `pip install -r requirements.txt` 即可运行，不需要 Node 环境。
 
@@ -247,7 +263,7 @@ python main.py --build-kb   # 重建向量库
 ```
 python main.py               # 启动网页版（默认）
 python main.py --clean       # 清洗数据
-python main.py --analyze     # 关联分析（生成箱线图到 output/analysis/）
+python main.py --analyze     # 关联分析（只生成箱线图到 output/analysis/，网页已移除该页）
 python main.py --build-kb    # 重建知识库
 python main.py --chat        # 命令行聊天
 ```

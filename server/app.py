@@ -43,7 +43,6 @@ PORT = 8765
 
 WEB_DIR = ROOT_DIR / "web"
 POSTER_DIR = ROOT_DIR / "data" / "posters"
-ANALYSIS_DIR = ROOT_DIR / "output" / "analysis"
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -76,9 +75,12 @@ CORS_HEADERS = [
 # 电影标题 / 文件名里需要替换掉的 Windows 非法字符
 ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 
+
+class ClientGone(Exception):
+    """浏览器提前断开连接（流式输出时常见）。"""
+
 MAX_BODY_BYTES = 1 << 20  # 1MB，足够聊天输入
 CHAT_TIMEOUT_SEC = 90.0
-ANALYSIS_CACHE_SEC = 600.0
 
 
 # 通用小工具
@@ -200,10 +202,6 @@ class AppState:
         self.model_name = ""
         self.embed_name = ""
         self.poster_stats = {"have": 0, "total": 0}
-
-        self._analysis_cache = None
-        self._analysis_cache_at = 0.0
-        self._analysis_lock = threading.Lock()
 
         self.good_threshold = 7.0
 
@@ -436,69 +434,6 @@ class AppState:
                     return title
         return None
 
-    def get_analysis(self):
-        """分析结果 + 图表，缓存 10 分钟，避免每次重算重画。"""
-        import pandas as pd
-
-        now = time.time()
-        with self._analysis_lock:
-            if self._analysis_cache is not None and (now - self._analysis_cache_at) < ANALYSIS_CACHE_SEC:
-                return self._analysis_cache
-
-        from src.analyzer import MovieCorrelationAnalyzer
-
-        results = MovieCorrelationAnalyzer(self.cfg).analyze() or {}
-
-        insights = [str(x) for x in (results.get("insights") or [])]
-
-        correlations = []
-        for item in results.get("strong_correlations") or []:
-            correlations.append(
-                {
-                    "var1": to_str(item.get("var1")),
-                    "var2": to_str(item.get("var2")),
-                    "correlation": to_float(item.get("correlation")) or 0.0,
-                    "direction": to_str(item.get("direction")),
-                }
-            )
-
-        genres = []
-        gdf = results.get("genre_analysis")
-        if isinstance(gdf, pd.DataFrame) and not gdf.empty:
-            for _, row in gdf.iterrows():
-                genres.append(
-                    {
-                        "genre": to_str(row.get("genre")),
-                        "count": to_int(row.get("count")) or 0,
-                        "avg_rating": to_float(row.get("avg_rating")),
-                    }
-                )
-
-        directors = []
-        ddf = results.get("top_directors")
-        if isinstance(ddf, pd.DataFrame) and not ddf.empty:
-            for _, row in ddf.iterrows():
-                directors.append(
-                    {
-                        "director": to_str(row.get("director")),
-                        "count": to_int(row.get("count")) or 0,
-                        "avg_rating": to_float(row.get("avg_rating")),
-                    }
-                )
-
-        payload = {
-            "insights": insights,
-            "correlations": correlations,
-            "genres": genres,
-            "directors": directors,
-            "charts": {"boxplot": "/api/chart/boxplot"},
-        }
-
-        with self._analysis_lock:
-            self._analysis_cache = payload
-            self._analysis_cache_at = time.time()
-        return payload
-
 
 APP = AppState()
 
@@ -559,16 +494,6 @@ def find_poster_file(title):
     return None
 
 
-def find_chart_file(name):
-    mapping = {
-        "boxplot": ANALYSIS_DIR / "genre_rating_box.png",
-    }
-    path = mapping.get(name)
-    if path is not None and path.is_file():
-        return path
-    return None
-
-
 # HTTP 处理
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "MovieAgentHTTP/1.0"
@@ -595,6 +520,27 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def send_error_json(self, message, status=400):
         self.send_json({"error": str(message)}, status=status)
+
+    def start_sse(self):
+        """开启 Server-Sent Events 响应（分块传输，无需预先知道长度）。"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        for key, value in CORS_HEADERS:
+            self.send_header(key, value)
+        self.end_headers()
+        self.close_connection = True
+
+    def sse_send(self, obj):
+        """推送一条 SSE 消息，立即 flush（否则会被 http.server 缓冲住）。"""
+        try:
+            payload = "data: " + dumps(obj).decode("utf-8") + "\n\n"
+            self.wfile.write(payload.encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            raise ClientGone()
 
     def send_file(self, path, content_type=None):
         try:
@@ -646,10 +592,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.api_movies(q("q"), q("genre"), q("sort") or "rating", q("limit") or "200")
         elif path == "/api/movie":
             self.api_movie(q("title"))
-        elif path == "/api/analysis":
-            self.api_analysis()
-        elif path == "/api/chart/boxplot":
-            self.api_chart("boxplot")
         elif path == "/api/cinemas":
             self.api_cinemas(q("city") or "成都")
         elif path == "/api/poster":
@@ -667,6 +609,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/chat":
             self.api_chat(body if isinstance(body, dict) else {})
+        elif path == "/api/chat/stream":
+            self.api_chat_stream(body if isinstance(body, dict) else {})
         elif path == "/api/chat/reset":
             self.api_chat_reset()
         elif path.startswith("/api/"):
@@ -817,6 +761,61 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
         return out
 
+    def api_chat_stream(self, body):
+        """流式对话：以 SSE 逐块推送 token，前端边收边渲染。"""
+        message = to_str(body.get("message"))
+        if not message:
+            self.send_error_json("message 不能为空", 400)
+            return
+        if body.get("reset"):
+            self.api_chat_reset(silent=True)
+
+        with APP.init_lock:
+            ready = APP.ready
+            error = APP.error
+        if not ready:
+            hint = "模型正在初始化，请稍候" if not error else f"模型初始化失败: {error}"
+            self.send_json({"error": hint}, 503)
+            return
+
+        self.start_sse()
+        started = time.time()
+
+        def gen():
+            """在锁内跑 agent.chat_stream，把事件转成 SSE 推送。"""
+            with APP.lock:
+                for ev in APP.agent.chat_stream(message):
+                    yield ev
+
+        try:
+            for ev in gen():
+                self.sse_send(ev)
+                if ev.get("type") == "done":
+                    answer = to_str(ev.get("answer"))
+                    movie_title = APP.extract_movie_title(message, answer)
+                    poster = self._public_poster(ev.get("poster_path"))
+                    if poster is None and movie_title:
+                        poster = APP.poster_url(movie_title)
+                    trailer = to_str(ev.get("trailer_url"))
+                    if trailer and not trailer.startswith("http"):
+                        trailer = None
+                    self.sse_send({
+                        "type": "meta",
+                        "poster": poster,
+                        "poster_missing": bool(movie_title) and poster is None,
+                        "trailer": trailer or None,
+                        "movie": movie_title,
+                        "elapsed_ms": int((time.time() - started) * 1000),
+                    })
+        except ClientGone:
+            logger.info("客户端断开，停止流式输出")
+        except Exception as exc:
+            traceback.print_exc()
+            try:
+                self.sse_send({"type": "error", "message": f"流式输出失败: {exc_text(exc)}"})
+            except ClientGone:
+                pass
+
     def api_chat(self, body):
         message = to_str(body.get("message"))
         reset = bool(body.get("reset"))
@@ -931,26 +930,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             APP.agent.reset_history()
         if not silent:
             self.send_json({"ok": True})
-
-    def api_analysis(self):
-        if APP.cfg is None and not APP.load_config_once():
-            self.send_error_json("配置加载失败", 500)
-            return
-        if APP.cfg is None:
-            self.send_error_json("配置加载失败", 500)
-            return
-        try:
-            self.send_json(APP.get_analysis())
-        except Exception as exc:
-            traceback.print_exc()
-            self.send_error_json(f"分析失败: {exc_text(exc)}", 500)
-
-    def api_chart(self, name):
-        path = find_chart_file(name)
-        if path is None:
-            self.send_error_json(f"图表不存在: {name}", 404)
-            return
-        self.send_file(path, "image/png")
 
     def api_cinemas(self, city):
         city = to_str(city) or "成都"

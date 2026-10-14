@@ -2,7 +2,7 @@
    影探 · 电影智能体 — 前端逻辑
    Vue 3（全局构建，Composition API），无需构建工具
    ============================================================ */
-const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
 
 /* ---------- 轻量 Markdown 渲染（先转义，防 XSS）---------- */
 function renderMd(src) {
@@ -100,14 +100,13 @@ function renderMd(src) {
 createApp({
   setup() {
     /* ===== 全局状态 ===== */
-    const VIEWS = ['home', 'chat', 'library', 'analysis', 'cinema'];
+    const VIEWS = ['home', 'chat', 'library', 'cinema'];
     const hashView = (location.hash || '').replace(/^#\/?/, '');
     const view = ref(VIEWS.includes(hashView) ? hashView : 'home');
     const navItems = [
       { key: 'home', label: '首页', icon: '🏠' },
       { key: 'chat', label: '对话', icon: '💬' },
       { key: 'library', label: '电影库', icon: '🎞️' },
-      { key: 'analysis', label: '数据分析', icon: '📊' },
       { key: 'cinema', label: '附近影院', icon: '🏢' },
     ];
 
@@ -226,7 +225,6 @@ createApp({
     const go = (key) => {
       view.value = key;
       if (key === 'library' || key === 'home') loadMovies();
-      if (key === 'analysis') loadAnalysis();
     };
 
     /* ===== 首页 ===== */
@@ -251,6 +249,7 @@ createApp({
     const messages = ref([]);
     const draft = ref('');
     const thinking = ref(false);
+    const toolHint = ref('');
     const chatScroll = ref(null);
     const chatInput = ref(null);
 
@@ -281,45 +280,104 @@ createApp({
       draft.value = '';
       if (chatInput.value) chatInput.value.style.height = 'auto';
       thinking.value = true;
+      toolHint.value = '';
       scrollBottom();
 
+      // 先插入一条空的 AI 消息，流式往里追加
+      const msg = reactive({ role: 'ai', text: '', poster: null, posterMissing: false, trailer: null, active: true });
+      messages.value.push(msg);
+
+      let gotToken = false;
+      const finish = (finalText) => {
+        if (finalText != null) msg.text = finalText;
+        msg.active = false;
+        thinking.value = false;
+        toolHint.value = '';
+        scrollBottom();
+      };
+
       try {
-        const d = await api('/api/chat', {
+        const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text }),
         });
-        // MovieAgent.chat() 会把模型异常当作普通回答返回，这里识别出来单独提示
-        const answer = String(d.answer || '');
-        const isModelError = /模型调用出错|Error code:|Free quota|invalid_api_key|Unauthorized/i.test(answer);
-        if (isModelError) {
-          const reason = /Free quota exhausted/i.test(answer) ? '通义千问免费额度已用尽（Free quota exhausted）'
-            : /invalid_api_key|Unauthorized/i.test(answer) ? 'DashScope API Key 无效或未配置'
-            : /arrearage|欠费/i.test(answer) ? '账户欠费'
-            : '模型服务暂时不可用';
-          messages.value.push({
-            role: 'ai',
-            text: `⚠️ **模型调用失败**\n\n${reason}\n\n`
-              + '- 检查 `config/config.yaml` 里的 `qwen_api_key` 是否有效\n'
-              + '- 到 DashScope 控制台确认额度 / 余额后重试\n\n'
-              + `**原始报错**\n\n\`\`\`\n${answer}\n\`\`\``,
+        if (!res.ok || !res.body) {
+          // 后端不支持流式（或未就绪）时退回一次性接口
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buf = '';
+        let toolNames = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop();
+          for (const part of parts) {
+            const line = part.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            let ev;
+            try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+            if (ev.type === 'token') {
+              if (!gotToken) { thinking.value = false; gotToken = true; }
+              msg.text += ev.text;
+              scrollBottom();
+            } else if (ev.type === 'tool') {
+              toolNames = ev.names || [];
+              toolHint.value = `正在查询：${toolNames.join('、')}`;
+              // 工具调用前的铺垫语作废，等最终答案重新推流
+              msg.text = '';
+              gotToken = false;
+              thinking.value = true;
+              scrollBottom();
+            } else if (ev.type === 'meta') {
+              msg.poster = ev.poster || null;
+              msg.posterMissing = !!ev.poster_missing && !ev.poster;
+              msg.trailer = ev.trailer || null;
+              if (ev.movie) loadMovieContext(ev.movie);
+            } else if (ev.type === 'error') {
+              msg.text = `⚠️ ${ev.message}`;
+            }
+          }
+        }
+        if (!msg.text) msg.text = '（未收到回复，请重试）';
+        finish();
+      } catch (e) {
+        // 流式失败时的兜底：走原来的非流式接口
+        try {
+          const d = await api('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text }),
           });
-          toast('模型调用失败：' + reason, 'err', 8000);
-        } else {
-          // 海报直接跟着对话消息走（原来只存了 trailer，poster 被丢掉了）
-          messages.value.push({
-            role: 'ai',
-            text: answer,
-            poster: d.poster || null,
-            posterMissing: !!d.poster_missing && !d.poster,
-            trailer: d.trailer || null,
-          });
-          if (d.movie) loadMovieContext(d.movie);
-        }      } catch (e) {
-        messages.value.push({ role: 'ai', text: `⚠️ ${e.message}` });
-      } finally {
-        thinking.value = false;
-        scrollBottom();
+          const answer = String(d.answer || '');
+          const isModelError = /模型调用出错|Error code:|Free quota|invalid_api_key|Unauthorized/i.test(answer);
+          if (isModelError) {
+            const reason = /Free quota exhausted/i.test(answer) ? '模型免费额度已用尽'
+              : /invalid_api_key|Unauthorized/i.test(answer) ? 'API Key 无效或未配置'
+              : /arrearage|欠费/i.test(answer) ? '账户欠费'
+              : '模型服务暂时不可用';
+            msg.text = `⚠️ **模型调用失败**\n\n${reason}\n\n`
+              + '- 检查 `config/config.yaml` 里的 `api_key` 是否有效\n'
+              + '- 到对应平台确认额度 / 余额后重试\n\n'
+              + `**原始报错**\n\n\`\`\`\n${answer}\n\`\`\``;
+            toast('模型调用失败：' + reason, 'err', 8000);
+          } else {
+            msg.text = answer;
+            msg.poster = d.poster || null;
+            msg.posterMissing = !!d.poster_missing && !d.poster;
+            msg.trailer = d.trailer || null;
+            if (d.movie) loadMovieContext(d.movie);
+          }
+        } catch (e2) {
+          msg.text = `⚠️ ${e2.message}`;
+        }
+        finish();
       }
     };
 
@@ -414,24 +472,6 @@ createApp({
       nextTick(send);
     };
 
-    /* ===== 数据分析 ===== */
-    const analysis = ref(null);
-    const loadingAnalysis = ref(false);
-    const analysisError = ref('');
-
-    const loadAnalysis = async () => {
-      if (analysis.value || loadingAnalysis.value) return;
-      loadingAnalysis.value = true;
-      analysisError.value = '';
-      try {
-        analysis.value = await api('/api/analysis');
-      } catch (e) {
-        analysisError.value = e.message;
-      } finally {
-        loadingAnalysis.value = false;
-      }
-    };
-
     /* ===== 附近影院 ===== */
     const city = ref('成都');
     const cinemas = ref([]);
@@ -468,7 +508,6 @@ createApp({
       const ask = new URLSearchParams(location.search).get('ask');
       if (ask && ask.trim()) pendingAsk.value = ask.trim();
       pollStatus();
-      loadAnalysis();
     });
 
     // 进入影院页时若还没搜索过，自动搜索一次默认城市；并同步 URL 哈希
@@ -482,12 +521,11 @@ createApp({
       status, statusText, statusClass,
       movies, loadingMovies, stats, topGenres, railMovies, fmt, toasts, toast,
       heroQuery, hints, askFromHero, quickAsk,
-      messages, draft, thinking, chatScroll, chatInput, chatSubtitle,
+      messages, draft, thinking, toolHint, chatScroll, chatInput, chatSubtitle,
       send, resetChat, autoGrow, scrollBottom,
       currentMovie, movieDetail, detailReviews, loadMovieContext, showPoster,
       libQuery, libGenre, libSort, filteredMovies,
       drawerOpen, drawerMovie, drawerDetail, drawerReviews, openMovie, askAboutMovie,
-      analysis, loadingAnalysis, analysisError, loadAnalysis,
       city, cinemas, cinemaLoading, cinemaError, searchCinemas, openUrl,
       renderMd,
     };

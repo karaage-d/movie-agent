@@ -257,9 +257,11 @@ class MovieAgent:
                         "参数: year(年份或区间，如 2025 / 2020-2025，可留空), "
                         "genre(类型关键词，如 科幻，可留空), min_rating(最低豆瓣评分，0 表示不限), limit(返回条数)。")
         self._make_tool(mt.search_movie_web, "search_movie_web",
-                        "查询一部电影的信息：先查本地知识库，本地没有才联网爬取豆瓣数据。"
-                        "当用户提到具体片名、或本地知识库查不到该片时使用。"
-                        "参数: movie_name(电影名称)。")
+                        "查一部电影：本地知识库优先（评分/猫眼分/评论以本地为准），"
+                        "同时联网补齐本地缺失的字段（预告片、豆瓣页、简介、海报等）。"
+                        "库里完全没收录的片子则全部取自联网。"
+                        "参数: movie_name(电影名称), need_trailer(填 1 表示需要预告片), "
+                        "need_poster(填 1 表示需要海报), force_refresh(填 1 强制联网)。")
 
     def _build_agent(self):
         """绑定 tools 到 LLM"""
@@ -305,6 +307,34 @@ class MovieAgent:
                 tool_calls.append({"name": name, "args": args, "id": tool_id})
         return tool_calls
 
+    def _run_tool_calls(self, tool_calls, messages):
+        """执行一批工具调用，把结果作为 ToolMessage 追加到 messages。"""
+        import inspect
+
+        for tc in tool_calls:
+            name = tc["name"]
+            args = tc["args"] or {}
+            tid = tc["id"]
+            func = self.tool_map.get(name)
+            if not func:
+                result = f"未知工具: {name}"
+            else:
+                try:
+                    # 把字符串数字参数转成正确类型
+                    sig = inspect.signature(func)
+                    for pname, param in sig.parameters.items():
+                        if pname in args and param.annotation == int and isinstance(args[pname], str):
+                            try:
+                                args[pname] = int(args[pname])
+                            except (ValueError, TypeError):
+                                pass
+                    result = func(**args)
+                except Exception as e:
+                    result = f"工具 {name} 执行出错: {e}"
+            if self.cfg["agent"]["verbose"]:
+                logger.info(f"🔧 调用工具 {name}({args}) → {str(result)[:100]}")
+            messages.append(ToolMessage(content=str(result), tool_call_id=tid))
+
     def chat(self, user_input):
         self._trim_history()
         messages = [SystemMessage(content=self.system_prompt)]
@@ -327,33 +357,99 @@ class MovieAgent:
                 self._trim_history()
                 return final_text
 
-            # 执行工具调用
-            for tc in tool_calls:
-                name = tc["name"]
-                args = tc["args"] or {}
-                tid = tc["id"]
-                func = self.tool_map.get(name)
-                if not func:
-                    result = f"未知工具: {name}"
-                else:
-                    try:
-                        # 把字符串数字参数转成正确类型
-                        import inspect
-                        sig = inspect.signature(func)
-                        for pname, param in sig.parameters.items():
-                            if pname in args and param.annotation == int and isinstance(args[pname], str):
-                                try:
-                                    args[pname] = int(args[pname])
-                                except (ValueError, TypeError):
-                                    pass
-                        result = func(**args)
-                    except Exception as e:
-                        result = f"工具 {name} 执行出错: {e}"
-                if self.cfg["agent"]["verbose"]:
-                    logger.info(f"🔧 调用工具 {name}({args}) → {str(result)[:100]}")
-                messages.append(ToolMessage(content=str(result), tool_call_id=tid))
+            self._run_tool_calls(tool_calls, messages)
 
         return "抱歉，经过多轮推理仍未完成，请换个说法试试。"
+
+    def chat_stream(self, user_input):
+        """流式对话：逐块 yield 事件，供 HTTP 层边收边发给前端。
+
+        yield 的字典有三种 type：
+          token —— 正文增量，前端直接追加显示
+          tool  —— 正在调用某工具（用于提示"正在查询…"）
+          done  —— 结束，带完整答案与海报/预告片信息
+
+        注意：只有在**确定没有后续工具调用**的那一轮，正文才会推给前端。
+        否则模型在调用工具前常说的"我来帮你查一下…"会先流出去，
+        工具跑完正文又从零开始，前端就会出现重复内容。
+        """
+        self._trim_history()
+        messages = [SystemMessage(content=self.system_prompt)]
+        messages.extend(self.history)
+        current_human = HumanMessage(content=user_input)
+        messages.append(current_human)
+
+        final_text = ""
+        emitted = False
+        for _ in range(self.max_iterations):
+            texts = []          # 本轮已收到的正文分片
+            collected = None    # 本轮汇总的工具调用
+            aborted = False     # 本轮出现工具调用（正文作废，停止下发）
+            try:
+                for chunk in self.llm_with_tools.stream(messages):
+                    msg = getattr(chunk, "message", chunk)
+                    text = getattr(msg, "content", "") or ""
+                    tcs = getattr(msg, "tool_calls", None) or []
+                    if tcs:
+                        collected = [
+                            {"name": c.get("name"), "args": c.get("args", {}),
+                             "id": c.get("id", "call_0")}
+                            for c in tcs
+                        ]
+                        aborted = True      # 这轮是工具调用，之前的正文是铺垫
+                        continue
+                    if not text or aborted:
+                        continue
+                    texts.append(text)
+                    yield {"type": "token", "text": text}   # 边收边发
+                    emitted = True
+            except Exception as e:
+                logger.warning(f"流式调用失败，回退非流式: {e}")
+                try:
+                    ai_msg = self.llm_with_tools.invoke(messages)
+                    aborted = False
+                    texts = [ai_msg.content or ""]
+                    collected = self._parse_tool_calls(ai_msg) or None
+                    if collected:
+                        aborted = True
+                    elif texts[0]:
+                        yield {"type": "token", "text": texts[0]}
+                        emitted = True
+                except Exception as e2:
+                    yield {"type": "error", "message": f"模型调用出错: {e2}"}
+                    return
+            else:
+                round_text = "".join(texts)
+
+            # 没有工具调用 -> 本轮正文就是最终答案
+            if not collected:
+                final_text = round_text if not aborted else ""
+                break
+
+            # 有工具调用：铺垫语不下发（若已零星发出，交给前端在下一次 done 时整段替换）
+            if texts:
+                logger.info(f"工具调用前的铺垫语已丢弃: {''.join(texts).strip()[:40]}")
+            yield {"type": "tool", "names": [c["name"] for c in collected]}
+            messages.append(AIMessage(
+                content="".join(texts),
+                tool_calls=[{"name": c["name"], "args": c["args"], "id": c["id"]}
+                            for c in collected],
+            ))
+            self._run_tool_calls(collected, messages)
+
+        if not emitted or not final_text:
+            final_text = final_text or "抱歉，我没能理解你的问题，请换个说法试试。"
+            yield {"type": "token", "text": final_text}
+
+        self.history.append(current_human)
+        self.history.append(AIMessage(content=final_text))
+        self._trim_history()
+        yield {
+            "type": "done",
+            "answer": final_text,
+            "poster_path": self._extract_path(final_text),
+            "trailer_url": self._extract_url(final_text),
+        }
 
     def chat_with_details(self, user_input):
         response = self.chat(user_input)

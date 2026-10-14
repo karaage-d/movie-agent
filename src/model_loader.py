@@ -227,6 +227,70 @@ def _make_openai_chat(api_key, model_name, temperature, max_tokens, base_url,
             gen = ChatGeneration(message=ai_msg)
             return ChatResult(generations=[gen])
 
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            """流式生成：逐块 yield ChatGenerationChunk，供 Agent 边收边发。
+
+            工具调用的增量块按 index 累积，最后一块带完整的 tool_calls。
+            """
+            from langchain_core.messages import AIMessageChunk
+            from langchain_core.outputs import ChatGenerationChunk
+
+            msgs = self._convert_messages(messages)
+            tools = kwargs.get("tools", None) or getattr(self, "_tools", None)
+
+            call_kwargs = dict(
+                model=self.model_name_,
+                messages=msgs,
+                temperature=self.temperature_,
+                max_tokens=self.max_tokens_,
+                stream=True,
+            )
+            if tools:
+                call_kwargs["tools"] = tools
+            if self._extra_body:
+                call_kwargs["extra_body"] = dict(self._extra_body)
+
+            pending = {}   # index -> {"id":..., "name":..., "args": str}
+            for chunk in self._client.chat.completions.create(**call_kwargs):
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                text = getattr(delta, "content", None)
+                if text:
+                    yield ChatGenerationChunk(message=AIMessageChunk(content=text))
+
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    slot = pending.setdefault(
+                        tc.index if tc.index is not None else 0,
+                        {"id": "", "name": "", "args": ""},
+                    )
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        if getattr(fn, "name", None):
+                            slot["name"] = fn.name
+                        if getattr(fn, "arguments", None):
+                            slot["args"] += fn.arguments
+
+            if pending:
+                tool_calls = []
+                for idx in sorted(pending):
+                    slot = pending[idx]
+                    raw = slot["args"] or "{}"
+                    try:
+                        args = json.loads(raw)
+                    except json.JSONDecodeError:
+                        args = {}
+                    tool_calls.append({
+                        "name": slot["name"],
+                        "args": args,
+                        "id": slot["id"] or f"call_{idx}",
+                    })
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(content="", tool_calls=tool_calls)
+                )
+
         def bind_tools(self, tools):
             """把工具定义转成 OpenAI Function Calling 格式（各家通用）"""
             api_tools = []

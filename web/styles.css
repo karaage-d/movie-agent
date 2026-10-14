@@ -81,8 +81,8 @@ body {
 
 ::selection { background: rgba(232, 179, 75, 0.28); color: #fff; }
 
-/* 数字统一等宽，表格/评分不跳动 */
-.stat-value, .corr-value { font-variant-numeric: tabular-nums; }
+/* 数字统一等宽，评分不跳动 */
+.stat-value { font-variant-numeric: tabular-nums; }
 
 /* 自定义滚动条 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -764,6 +764,16 @@ body {
 
 .msg.ai .bubble { border-bottom-left-radius: 5px; }
 
+/* 流式输出中：末尾跟一个闪动光标，让逐字效果更明显 */
+.bubble.streaming > div:last-of-type::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--gold);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+
 .bubble :is(h1, h2, h3) { font-size: 14.5px; margin: 10px 0 6px; font-weight: 650; }
 .bubble p { margin: 7px 0; }
 .bubble ul { margin: 8px 0 8px 4px; padding-left: 17px; }
@@ -1047,71 +1057,6 @@ body {
 .movie-info { padding: 11px 12px 13px; }
 .movie-title { font-size: 13px; font-weight: 570; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .movie-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* ============================================================
-   10. 数据分析
-   ============================================================ */
-.insight-list { display: flex; flex-direction: column; gap: 11px; }
-
-.insight {
-  display: flex;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--line);
-  background: linear-gradient(100deg, rgba(232, 179, 75, 0.07), rgba(255, 255, 255, 0.015) 45%);
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-1);
-}
-
-.insight-index {
-  flex: none;
-  width: 22px; height: 22px;
-  border-radius: 7px;
-  background: rgba(232, 179, 75, 0.16);
-  border: 1px solid var(--line-gold);
-  color: var(--gold);
-  font-size: 11.5px;
-  font-weight: 680;
-  display: grid;
-  place-items: center;
-  margin-top: 1px;
-}
-
-.chart-frame {
-  border-radius: var(--r-md);
-  overflow: hidden;
-  border: 1px solid var(--line);
-  background: #0a0c11;
-}
-
-.chart-frame img { width: 100%; display: block; }
-
-.corr-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-
-.corr-table th {
-  text-align: left;
-  padding: 10px 12px;
-  color: var(--text-3);
-  font-weight: 550;
-  font-size: 11.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--line);
-}
-
-.corr-table td { padding: 11px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: var(--text-1); }
-.corr-table tr:last-child td { border-bottom: none; }
-.corr-table tbody tr { transition: background 0.2s var(--ease); }
-.corr-table tbody tr:hover { background: var(--surface-1); }
-
-.corr-value { font-weight: 640; }
-.corr-value.pos { color: var(--green); }
-.corr-value.neg { color: var(--red); }
-
-/* 双列布局 */
-.split-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 18px; align-items: start; }
 
 /* ============================================================
    11. 影院

@@ -155,7 +155,7 @@
               <!-- 消息流 -->
               <div v-for="(msg, i) in messages" :key="i" class="msg" :class="msg.role">
                 <div class="avatar">{{ msg.role === 'user' ? '🙋' : '🎬' }}</div>
-                <div class="bubble">
+                <div class="bubble" :class="{ 'streaming': msg.active }">
                   <div v-if="msg.role === 'ai'" v-html="renderMd(msg.text)"></div>
                   <div v-else>{{ msg.text }}</div>
                   <div v-if="msg.role === 'ai' && msg.poster" class="chat-poster">
@@ -178,7 +178,9 @@
                 <div class="avatar">🎬</div>
                 <div class="bubble">
                   <div class="typing"><i></i><i></i><i></i></div>
-                  <div style="font-size:11.5px;color:var(--text-3);margin-top:7px">影探正在查阅知识库…</div>
+                  <div style="font-size:11.5px;color:var(--text-3);margin-top:7px">
+                    {{ toolHint || '影探正在查阅知识库…' }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -360,111 +362,6 @@
               </div>
             </div>
           </div>
-
-        </div>
-      </section>
-
-      <!-- ---------------- 数据分析 ---------------- -->
-      <section class="view" v-else-if="view === 'analysis'" key="analysis">
-        <div class="view-inner">
-
-          <div class="section-head">
-            <h2 class="section-title">数据分析</h2>
-            <span class="section-desc">Spearman 秩相关系数 · 阈值 |r| ≥ 0.7</span>
-          </div>
-
-          <div v-if="loadingAnalysis" class="stat-grid">
-            <div v-for="n in 4" :key="n" class="skeleton" style="height:92px;border-radius:14px"></div>
-          </div>
-
-          <div v-else-if="!analysis">
-            <div class="empty">
-              <div class="empty-icon">📊</div>
-              <div class="empty-title">暂无分析结果</div>
-              <div class="empty-desc">{{ analysisError || '点击下方按钮开始计算' }}</div>
-              <button class="btn btn-primary" style="margin-top:10px" @click="loadAnalysis">开始分析</button>
-            </div>
-          </div>
-
-          <template v-else>
-            <div class="stat-grid">
-              <div class="stat">
-                <div class="stat-label">显著性关联</div>
-                <div class="stat-value">{{ analysis.correlations.length }}<span class="stat-unit">组</span></div>
-                <div class="stat-hint">|r| ≥ 0.7</div>
-              </div>
-              <div class="stat">
-                <div class="stat-label">类型维度</div>
-                <div class="stat-value">{{ analysis.genres.length }}<span class="stat-unit">类</span></div>
-                <div class="stat-hint">参与评分分析</div>
-              </div>
-              <div class="stat">
-                <div class="stat-label">平均分最高类型</div>
-                <div class="stat-value" style="font-size:19px">{{ analysis.genres[0] ? analysis.genres[0].genre : '—' }}</div>
-                <div class="stat-hint">{{ analysis.genres[0] ? analysis.genres[0].avg_rating + ' 分' : '' }}</div>
-              </div>
-              <div class="stat">
-                <div class="stat-label">样本导演数</div>
-                <div class="stat-value">{{ analysis.directors.length }}<span class="stat-unit">位</span></div>
-                <div class="stat-hint">按平均分排序</div>
-              </div>
-            </div>
-
-            <div class="section-head"><h2 class="section-title">自动洞察</h2></div>
-            <div class="insight-list">
-              <div v-for="(ins, i) in analysis.insights" :key="i" class="insight">
-                <span class="insight-index">{{ i + 1 }}</span><span>{{ ins }}</span>
-              </div>
-            </div>
-
-            <div class="split-2" style="margin-top:34px">
-              <div>
-                <div class="section-head" style="margin-top:0"><h2 class="section-title">变量相关性</h2></div>
-                <div class="card card-pad" style="padding:8px 10px">
-                  <table class="corr-table">
-                    <thead><tr><th>变量 A</th><th>变量 B</th><th>相关系数</th><th>方向</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(c, i) in analysis.correlations" :key="i">
-                        <td>{{ c.var1 }}</td>
-                        <td>{{ c.var2 }}</td>
-                        <td><span class="corr-value" :class="c.correlation > 0 ? 'pos' : 'neg'">{{ c.correlation }}</span></td>
-                        <td>{{ c.direction }}</td>
-                      </tr>
-                      <tr v-if="analysis.correlations.length === 0">
-                        <td colspan="4" style="text-align:center;color:var(--text-3);padding:22px">
-                          当前样本量下没有 |r| ≥ 0.7 的强相关组合
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div>
-                <div class="section-head" style="margin-top:0"><h2 class="section-title">各类型评分</h2></div>
-                <div class="card card-pad" style="padding:8px 10px">
-                  <table class="corr-table">
-                    <thead><tr><th>类型</th><th>样本</th><th>平均分</th></tr></thead>
-                    <tbody>
-                      <tr v-for="g in analysis.genres.slice(0, 12)" :key="g.genre">
-                        <td>{{ g.genre }}</td>
-                        <td>{{ g.count }}</td>
-                        <td><span class="corr-value" style="color:var(--gold)">{{ g.avg_rating }}</span></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            <div class="section-head">
-              <h2 class="section-title">类型评分分布</h2>
-              <span class="section-desc">中位数越靠上、箱体越窄，说明该类型口碑越稳定</span>
-            </div>
-            <div class="chart-frame">
-              <img :src="analysis.charts.boxplot" alt="各类型评分箱线图" loading="lazy">
-            </div>
-          </template>
 
         </div>
       </section>

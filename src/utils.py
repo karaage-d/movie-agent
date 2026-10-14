@@ -64,6 +64,34 @@ def rating_label(score, scale=10.0):
     return "烂片 💩"
 
 
+def is_blank(v):
+    """判断值是否为空 / NaN / NaT / 'nan' 字符串，供多处共用。"""
+    import math
+
+    if v is None:
+        return True
+    try:
+        if isinstance(v, float) and math.isnan(v):
+            return True
+    except Exception:
+        pass
+    try:
+        import pandas as pd
+
+        if v is pd.NaT:
+            return True
+        if pd.api.types.is_scalar(v):
+            try:
+                if pd.isna(v):
+                    return True
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        pass
+    text = str(v).strip()
+    return text == "" or text.lower() in ("nan", "nat", "none", "null")
+
+
 def init_dirs(cfg):
     for key in ["raw_dir", "cleaned_dir", "posters_dir"]:
         ensure_dir(ROOT_DIR / cfg["data"][key])
