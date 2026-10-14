@@ -46,3 +46,6 @@ data/cleaned/*.bak
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# --- 我生成的预览包，不属于项目 ---
+github-upload-preview.zip
